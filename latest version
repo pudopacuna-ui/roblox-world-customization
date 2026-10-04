@@ -1,1 +1,2023 @@
+--[[
+    World Editor  -  client-side visuals for Roblox
+    ------------------------------------------------------------
+    Tabs:   Presets / Lighting / Sky / Atmosphere / Post FX / Weather /
+            Character / Hats / Armor / Configs
+    Hats:   built in code from Parts and WedgeParts (no assets needed)
+    Armor:  full "Lich King" style armor set (no sword), built in code,
+            with a physics-driven cloak
+    UI:     Rayfield Gen2 (https://sirius.menu/gen2)
+    Menu:   RightShift toggles the window
 
+    Everything is client-side only: other players do not see it.
+]]
+
+local Lighting         = game:GetService("Lighting")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local lp  = Players.LocalPlayer
+local env = (getgenv and getgenv()) or _G
+
+-- remove a previous instance of the script, if any
+if env.WorldEditor and env.WorldEditor.Destroy then
+    pcall(env.WorldEditor.Destroy)
+end
+
+local okLib, Rayfield = pcall(function()
+    return loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+end)
+if not okLib or not Rayfield then
+    warn("[WorldEditor] Failed to load Rayfield Gen2: " .. tostring(Rayfield))
+    warn("[WorldEditor] Make sure your executor supports loadstring and game:HttpGet")
+    return
+end
+
+----------------------------------------------------------------------
+-- HELPERS
+----------------------------------------------------------------------
+local V3, CF, PI = Vector3.new, CFrame.new, math.pi
+
+local function rgb(r, g, b)
+    return Color3.fromRGB(r, g, b)
+end
+
+local function deepCopy(t)
+    if type(t) ~= "table" then return t end
+    local out = {}
+    for k, v in pairs(t) do out[k] = deepCopy(v) end
+    return out
+end
+
+local function merge(dst, src)
+    for k, v in pairs(src) do
+        if type(v) == "table" then
+            dst[k] = dst[k] or {}
+            merge(dst[k], v)
+        else
+            dst[k] = v
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- DEFAULT CONFIG (taken from the current game state)
+----------------------------------------------------------------------
+local LIGHT_PROPS = {
+    "ClockTime", "Brightness", "Ambient", "OutdoorAmbient", "ColorShift_Top",
+    "ColorShift_Bottom", "ExposureCompensation", "GlobalShadows",
+    "FogColor", "FogStart", "FogEnd",
+}
+
+local ORIGINAL = {}
+for _, p in ipairs(LIGHT_PROPS) do ORIGINAL[p] = Lighting[p] end
+
+local atmo0      = Lighting:FindFirstChildOfClass("Atmosphere")
+local fogWasOn   = Lighting.FogEnd < 90000
+
+local DEFAULTS = {
+    Lighting = {
+        ClockTime            = Lighting.ClockTime,
+        CycleSpeed           = 0,
+        Brightness           = math.clamp(Lighting.Brightness, 0, 10),
+        Ambient              = Lighting.Ambient,
+        OutdoorAmbient       = Lighting.OutdoorAmbient,
+        ColorShift_Top       = Lighting.ColorShift_Top,
+        ColorShift_Bottom    = Lighting.ColorShift_Bottom,
+        ExposureCompensation = math.clamp(Lighting.ExposureCompensation, -3, 3),
+        GlobalShadows        = Lighting.GlobalShadows,
+        FogOn                = fogWasOn,
+        FogColor             = Lighting.FogColor,
+        FogStart             = math.clamp(Lighting.FogStart, 0, 2000),
+        FogEnd               = fogWasOn and math.clamp(Lighting.FogEnd, 50, 5000) or 1000,
+    },
+    Atmosphere = {
+        Enabled = true,
+        Density = atmo0 and atmo0.Density or 0,
+        Offset  = atmo0 and atmo0.Offset or 0.25,
+        Color   = atmo0 and atmo0.Color or rgb(199, 170, 107),
+        Decay   = atmo0 and atmo0.Decay or rgb(92, 60, 13),
+        Glare   = atmo0 and math.clamp(atmo0.Glare, 0, 10) or 0,
+        Haze    = atmo0 and math.clamp(atmo0.Haze, 0, 10) or 0,
+    },
+    Post = {
+        Enabled = true, Brightness = 0, Contrast = 0, Saturation = 0,
+        TintColor = rgb(255, 255, 255),
+        Bloom = 0, BloomSize = 24, BloomThreshold = 1, SunRays = 0, Blur = 0,
+    },
+    Weather = { Type = "None", Intensity = 1, Wind = 0, WindAngle = 0, Lightning = true },
+    Sky = {
+        Enabled = false, Bk = "", Dn = "", Ft = "", Lf = "", Rt = "", Up = "",
+        StarCount = 3000, SunSize = 21, MoonSize = 11, CelestialBodies = true, Rotation = 0,
+    },
+    Character = {
+        Highlight = false, Fill = rgb(255, 0, 255), Outline = rgb(255, 255, 255),
+        FillTransparency = 0.6, Rainbow = false,
+        Material = "", UseColor = false, BodyColor = rgb(255, 255, 255), BodyTransparency = 0,
+        Trail = false, Aura = false,
+        HatY = 0, HatZ = 0,
+    },
+}
+
+local Config = deepCopy(DEFAULTS)
+
+Config.Hat = {
+    Color = rgb(255, 105, 180), Accent = rgb(255, 255, 255),
+    Transparency = 0.15, Material = "SmoothPlastic",
+    Neon = false, Rainbow = false, Highlight = false, Scale = 1,
+}
+
+Config.Armor = {
+    Main = rgb(40, 47, 66), Trim = rgb(150, 170, 200), Glow = rgb(90, 210, 255),
+    Cloth = rgb(20, 40, 100), Fur = rgb(205, 210, 220),
+    Transparency = 0, Material = "Metal", Highlight = false,
+    GlowLight = 1.2, CloakSway = 1,
+}
+
+----------------------------------------------------------------------
+-- WORLD PRESETS
+----------------------------------------------------------------------
+local PRESETS = {
+    Day = {
+        Lighting = { ClockTime = 14, Brightness = 3, Ambient = rgb(110, 110, 110), OutdoorAmbient = rgb(150, 150, 150) },
+        Atmosphere = { Density = 0.3, Color = rgb(199, 170, 107), Decay = rgb(92, 60, 13) },
+        Post = { Bloom = 0.4, SunRays = 0.1 },
+    },
+    Sunset = {
+        Lighting = { ClockTime = 17.7, Brightness = 2, Ambient = rgb(110, 70, 90), OutdoorAmbient = rgb(200, 110, 90), ColorShift_Top = rgb(255, 140, 80) },
+        Atmosphere = { Color = rgb(255, 150, 110), Decay = rgb(255, 80, 60), Density = 0.4, Haze = 2, Glare = 0.6 },
+        Post = { TintColor = rgb(255, 225, 205), Saturation = 0.2, Contrast = 0.1, Bloom = 0.8, SunRays = 0.25 },
+    },
+    Night = {
+        Lighting = { ClockTime = 0, Brightness = 0.5, Ambient = rgb(25, 30, 60), OutdoorAmbient = rgb(40, 50, 100), ExposureCompensation = 0.2 },
+        Atmosphere = { Color = rgb(40, 50, 90), Decay = rgb(10, 10, 30), Density = 0.35, Haze = 1 },
+        Post = { TintColor = rgb(200, 215, 255), Saturation = 0.1, Bloom = 0.9 },
+    },
+    Vaporwave = {
+        Lighting = { ClockTime = 19, Brightness = 2, Ambient = rgb(120, 50, 160), OutdoorAmbient = rgb(255, 80, 200), ColorShift_Top = rgb(255, 0, 170), ColorShift_Bottom = rgb(0, 220, 255) },
+        Atmosphere = { Color = rgb(255, 120, 220), Decay = rgb(120, 40, 255), Density = 0.45, Haze = 3, Glare = 1 },
+        Post = { TintColor = rgb(255, 220, 255), Saturation = 0.5, Contrast = 0.15, Bloom = 1.4, BloomSize = 40, SunRays = 0.3 },
+    },
+    Snow = {
+        Lighting = { ClockTime = 12, Brightness = 2, Ambient = rgb(140, 150, 170), OutdoorAmbient = rgb(190, 200, 220), FogOn = true, FogColor = rgb(225, 230, 240), FogStart = 20, FogEnd = 450 },
+        Atmosphere = { Color = rgb(235, 240, 250), Decay = rgb(200, 210, 230), Density = 0.5, Haze = 2 },
+        Post = { Saturation = -0.2, TintColor = rgb(230, 240, 255) },
+        Weather = { Type = "Snow" },
+    },
+    Storm = {
+        Lighting = { ClockTime = 15, Brightness = 1, Ambient = rgb(50, 55, 65), OutdoorAmbient = rgb(70, 75, 90), FogOn = true, FogColor = rgb(70, 75, 85), FogStart = 0, FogEnd = 350 },
+        Atmosphere = { Color = rgb(80, 85, 95), Decay = rgb(40, 45, 55), Density = 0.55, Haze = 3 },
+        Post = { Saturation = -0.3, Contrast = 0.15, TintColor = rgb(200, 210, 225), SunRays = 0 },
+        Weather = { Type = "Storm", Wind = 8, WindAngle = 40 },
+    },
+    Bloodmoon = {
+        Lighting = { ClockTime = 0, Brightness = 0.8, Ambient = rgb(60, 10, 15), OutdoorAmbient = rgb(110, 20, 25), ColorShift_Top = rgb(200, 20, 20), ExposureCompensation = 0.1 },
+        Atmosphere = { Color = rgb(150, 25, 25), Decay = rgb(60, 5, 5), Density = 0.4, Haze = 2.5 },
+        Post = { TintColor = rgb(255, 200, 200), Saturation = 0.3, Contrast = 0.2, Bloom = 1 },
+        Weather = { Type = "Ash" },
+    },
+    Mist = {
+        Lighting = { ClockTime = 7, Brightness = 1.5, Ambient = rgb(120, 125, 130), OutdoorAmbient = rgb(150, 155, 160), FogOn = true, FogColor = rgb(170, 175, 180), FogStart = 10, FogEnd = 220 },
+        Atmosphere = { Color = rgb(190, 195, 200), Decay = rgb(170, 175, 180), Density = 0.6, Haze = 4 },
+        Post = { Saturation = -0.35, Contrast = 0.1, Bloom = 0.2 },
+    },
+}
+
+----------------------------------------------------------------------
+-- STATE
+----------------------------------------------------------------------
+local destroyed       = false
+local visualsEnabled  = false   -- sky / atmosphere / post effects are only touched after the user changes something
+local charEnabled     = false   -- same for character effects
+local ui                        -- Rayfield window (created below)
+
+local function notify(title, content)
+    if ui then
+        pcall(function() ui:Notify({ title = title, content = content }) end)
+    end
+end
+
+----------------------------------------------------------------------
+-- SKY / ATMOSPHERE / POST EFFECTS
+----------------------------------------------------------------------
+-- objects that the game created are stashed (not destroyed) so they can be restored
+local stash = {}
+
+local function stashChildren(className)
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA(className) and not obj:GetAttribute("WE") then
+            stash[#stash + 1] = obj
+            obj.Parent = nil
+        end
+    end
+end
+
+local function restoreChildren(className)
+    for i = #stash, 1, -1 do
+        local obj = stash[i]
+        if obj:IsA(className) then
+            obj.Parent = Lighting
+            table.remove(stash, i)
+        end
+    end
+end
+
+local function ensureEffect(className, name)
+    local obj = Lighting:FindFirstChild(name)
+    if not obj then
+        obj = Instance.new(className)
+        obj.Name = name
+        obj:SetAttribute("WE", true)
+        obj.Parent = Lighting
+    end
+    return obj
+end
+
+local flashTime, flashing = 0, false
+local touched = {}
+
+local function lightingStep(dt)
+    local L = Config.Lighting
+    if L.CycleSpeed ~= 0 then
+        L.ClockTime = (L.ClockTime + dt * L.CycleSpeed) % 24
+    end
+    local target = {}
+    for _, p in ipairs(LIGHT_PROPS) do target[p] = L[p] end
+    target.FogStart = L.FogOn and L.FogStart or 0
+    target.FogEnd   = L.FogOn and L.FogEnd or 100000
+
+    for _, p in ipairs(LIGHT_PROPS) do
+        local v = target[p]
+        if v ~= ORIGINAL[p] then
+            touched[p] = true
+            Lighting[p] = v
+        elseif touched[p] then
+            touched[p] = nil
+            Lighting[p] = v
+        end
+    end
+
+    -- lightning flash (exposure spike)
+    if flashTime > 0 then
+        flashTime = flashTime - dt
+        flashing = true
+        Lighting.ExposureCompensation = target.ExposureCompensation + 1.6
+    elseif flashing then
+        flashing = false
+        Lighting.ExposureCompensation = target.ExposureCompensation
+    end
+end
+
+local function applyVisuals()
+    if not visualsEnabled then return end
+
+    -- sky
+    local S = Config.Sky
+    if S.Enabled then
+        stashChildren("Sky")
+        local sky = ensureEffect("Sky", "WE_Sky")
+        local faces = {
+            SkyboxBk = S.Bk, SkyboxDn = S.Dn, SkyboxFt = S.Ft,
+            SkyboxLf = S.Lf, SkyboxRt = S.Rt, SkyboxUp = S.Up,
+        }
+        for prop, id in pairs(faces) do
+            if id ~= "" and sky[prop] ~= id then sky[prop] = id end
+        end
+        sky.StarCount = S.StarCount
+        sky.SunAngularSize = S.SunSize
+        sky.MoonAngularSize = S.MoonSize
+        sky.CelestialBodiesShown = S.CelestialBodies
+        sky.SkyboxOrientation = V3(0, S.Rotation, 0)
+    else
+        local own = Lighting:FindFirstChild("WE_Sky")
+        if own then own:Destroy() end
+        restoreChildren("Sky")
+    end
+
+    -- atmosphere
+    local A = Config.Atmosphere
+    stashChildren("Atmosphere")
+    local atmo = ensureEffect("Atmosphere", "WE_Atmo")
+    atmo.Density = A.Enabled and A.Density or 0
+    atmo.Offset, atmo.Color, atmo.Decay, atmo.Glare, atmo.Haze = A.Offset, A.Color, A.Decay, A.Glare, A.Haze
+
+    -- post processing
+    local P = Config.Post
+    local cc = ensureEffect("ColorCorrectionEffect", "WE_CC")
+    cc.Enabled = P.Enabled
+    cc.Brightness, cc.Contrast, cc.Saturation, cc.TintColor = P.Brightness, P.Contrast, P.Saturation, P.TintColor
+
+    local bloom = ensureEffect("BloomEffect", "WE_Bloom")
+    bloom.Enabled = P.Enabled
+    bloom.Intensity, bloom.Size, bloom.Threshold = P.Bloom, P.BloomSize, P.BloomThreshold
+
+    local rays = ensureEffect("SunRaysEffect", "WE_Rays")
+    rays.Enabled = P.Enabled
+    rays.Intensity, rays.Spread = P.SunRays, 0.5
+
+    local blur = ensureEffect("BlurEffect", "WE_Blur")
+    blur.Size = P.Blur
+    blur.Enabled = P.Enabled and P.Blur > 0
+end
+
+local function enableVisuals()
+    visualsEnabled = true
+    applyVisuals()
+end
+
+----------------------------------------------------------------------
+-- WEATHER
+----------------------------------------------------------------------
+local weatherLabels = { None = "off", Rain = "Rain", Storm = "Thunderstorm", Snow = "Snow", Ash = "Ash", Embers = "Embers" }
+local weatherPart, weatherEmitter
+local weatherYOffset = 45
+local weatherToggles = {}
+local weatherTag, presetTag
+
+local function syncWeatherUI()
+    local kind = Config.Weather.Type
+    for key, toggle in pairs(weatherToggles) do
+        pcall(function() toggle:Set(key == kind, true) end)
+    end
+    if weatherTag then
+        pcall(function()
+            if kind == "None" then
+                weatherTag:Set({ text = "Weather: off", color = rgb(110, 110, 130) })
+            else
+                weatherTag:Set({ text = "Weather: " .. weatherLabels[kind], color = rgb(70, 190, 110) })
+            end
+        end)
+    end
+end
+
+local function updateWeather()
+    local W = Config.Weather
+    if W.Type == "None" then
+        if weatherPart then
+            weatherPart:Destroy()
+            weatherPart, weatherEmitter = nil, nil
+        end
+        syncWeatherUI()
+        return
+    end
+
+    if not weatherPart then
+        weatherPart = Instance.new("Part")
+        weatherPart.Name = "WE_Weather"
+        weatherPart.Anchored, weatherPart.CanCollide, weatherPart.CanQuery, weatherPart.CanTouch = true, false, false, false
+        weatherPart.Transparency = 1
+        weatherPart.Size = V3(90, 1, 90)
+        weatherPart.Parent = workspace
+        weatherEmitter = Instance.new("ParticleEmitter")
+        weatherEmitter.Parent = weatherPart
+    end
+
+    local e, k = weatherEmitter, W.Intensity
+    e.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    e.EmissionDirection = Enum.NormalId.Bottom
+    weatherYOffset = 45
+    local windMul = 1
+
+    if W.Type == "Snow" then
+        e.Orientation = Enum.ParticleOrientation.FacingCamera
+        e.Color = ColorSequence.new(rgb(255, 255, 255))
+        e.Size = NumberSequence.new(0.35)
+        e.Transparency = NumberSequence.new(0.15)
+        e.Lifetime = NumberRange.new(6, 8)
+        e.Speed = NumberRange.new(5, 9)
+        e.SpreadAngle = Vector2.new(25, 25)
+        e.RotSpeed = NumberRange.new(-60, 60)
+        e.Rate = 350 * k
+        e.LightEmission = 0.3
+    elseif W.Type == "Ash" then
+        e.Orientation = Enum.ParticleOrientation.FacingCamera
+        e.Color = ColorSequence.new(rgb(140, 135, 135))
+        e.Size = NumberSequence.new(0.3)
+        e.Transparency = NumberSequence.new(0.3)
+        e.Lifetime = NumberRange.new(8, 10)
+        e.Speed = NumberRange.new(2, 4)
+        e.SpreadAngle = Vector2.new(40, 40)
+        e.RotSpeed = NumberRange.new(-30, 30)
+        e.Rate = 200 * k
+        e.LightEmission = 0
+    elseif W.Type == "Embers" then
+        weatherYOffset = -4
+        e.EmissionDirection = Enum.NormalId.Top
+        e.Orientation = Enum.ParticleOrientation.FacingCamera
+        e.Color = ColorSequence.new(rgb(255, 150, 40), rgb(255, 60, 10))
+        e.Size = NumberSequence.new(0.35, 0)
+        e.Transparency = NumberSequence.new(0)
+        e.Lifetime = NumberRange.new(4, 6)
+        e.Speed = NumberRange.new(6, 10)
+        e.SpreadAngle = Vector2.new(30, 30)
+        e.RotSpeed = NumberRange.new(0)
+        e.Rate = 150 * k
+        e.LightEmission = 1
+    else -- Rain / Storm
+        windMul = 6
+        e.Orientation = Enum.ParticleOrientation.VelocityParallel
+        e.Color = ColorSequence.new(rgb(170, 190, 230))
+        e.Size = NumberSequence.new(0.2)
+        e.Transparency = NumberSequence.new(0.45)
+        e.Lifetime = NumberRange.new(0.5, 0.7)
+        e.Speed = NumberRange.new(90, 110)
+        e.SpreadAngle = Vector2.new(3, 3)
+        e.RotSpeed = NumberRange.new(0)
+        e.Rate = (W.Type == "Storm" and 1500 or 800) * k
+        e.LightEmission = 0.1
+    end
+
+    local ang = math.rad(W.WindAngle)
+    local push = W.Wind * windMul
+    e.Acceleration = V3(math.cos(ang) * push, 0, math.sin(ang) * push)
+    syncWeatherUI()
+end
+
+----------------------------------------------------------------------
+-- CHARACTER EFFECTS (highlight, recolor, trail, aura)
+----------------------------------------------------------------------
+local bodyOriginals = setmetatable({}, { __mode = "k" })
+
+local function applyCharacter()
+    if not charEnabled then return end
+    local char = lp.Character
+    if not char then return end
+    local C = Config.Character
+    local root = char:FindFirstChild("HumanoidRootPart")
+
+    -- highlight
+    local hl = char:FindFirstChild("WE_HL")
+    if C.Highlight then
+        if not hl then
+            hl = Instance.new("Highlight")
+            hl.Name = "WE_HL"
+            hl.Parent = char
+        end
+        hl.FillColor, hl.OutlineColor, hl.FillTransparency = C.Fill, C.Outline, C.FillTransparency
+    elseif hl then
+        hl:Destroy()
+    end
+
+    -- body recolor / material / transparency
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= root then
+            if not bodyOriginals[part] then
+                bodyOriginals[part] = { part.Color, part.Material, part.Transparency }
+            end
+            local orig = bodyOriginals[part]
+            if orig[3] < 0.99 then
+                part.Material = (C.Material ~= "") and Enum.Material[C.Material] or orig[2]
+                part.Color = C.UseColor and C.BodyColor or orig[1]
+                part.Transparency = orig[3] + (1 - orig[3]) * C.BodyTransparency
+            end
+        end
+    end
+
+    if root then
+        -- trail
+        local trail = root:FindFirstChild("WE_Trail")
+        if C.Trail then
+            if not trail then
+                local a0 = Instance.new("Attachment")
+                a0.Name = "WE_A0"
+                a0.Position = V3(0, 1, 0)
+                a0.Parent = root
+                local a1 = Instance.new("Attachment")
+                a1.Name = "WE_A1"
+                a1.Position = V3(0, -1, 0)
+                a1.Parent = root
+                trail = Instance.new("Trail")
+                trail.Name = "WE_Trail"
+                trail.Attachment0, trail.Attachment1 = a0, a1
+                trail.Lifetime, trail.LightEmission = 0.6, 1
+                trail.Transparency = NumberSequence.new(0.1, 1)
+                trail.Parent = root
+            end
+            trail.Color = ColorSequence.new(C.Fill)
+        elseif trail then
+            trail:Destroy()
+            for _, n in ipairs({ "WE_A0", "WE_A1" }) do
+                local at = root:FindFirstChild(n)
+                if at then at:Destroy() end
+            end
+        end
+
+        -- aura
+        local aura = root:FindFirstChild("WE_Aura")
+        if C.Aura then
+            if not aura then
+                aura = Instance.new("ParticleEmitter")
+                aura.Name = "WE_Aura"
+                aura.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+                aura.Rate, aura.Lifetime, aura.Speed = 40, NumberRange.new(1, 1.6), NumberRange.new(1, 3)
+                aura.SpreadAngle = Vector2.new(180, 180)
+                aura.Size = NumberSequence.new(0.5, 0)
+                aura.LightEmission = 1
+                aura.Parent = root
+            end
+            aura.Color = ColorSequence.new(C.Fill)
+        elseif aura then
+            aura:Destroy()
+        end
+    end
+end
+
+local function enableCharacter()
+    charEnabled = true
+    applyCharacter()
+end
+
+----------------------------------------------------------------------
+-- GEAR: shared part builder
+-- Cones / spikes / blades are made of real triangles (every triangle is
+-- two WedgeParts), so surfaces are smooth with no "stair steps".
+----------------------------------------------------------------------
+local function makeBuilder(specs)
+    local S = { meta = {} }
+    local chain
+
+    local function put(t)
+        t.chain = chain
+        specs[#specs + 1] = t
+    end
+
+    local function add(shape, size, cf, role, ex)
+        put({
+            shape = shape, size = size, cf = cf, role = role or "main",
+            spin = ex and ex.spin, bob = ex and ex.bob, light = ex and ex.light,
+        })
+    end
+
+    -- cloak rows use a chain id so the physics step can drive them
+    function S.setChain(c, r)
+        chain = c and { c = c, r = r } or nil
+    end
+
+    -- vertical cylinder (axis along Y)
+    function S.cyl(d, h, cf, role, ex)
+        add(Enum.PartType.Cylinder, V3(h, d, d), cf * CFrame.Angles(0, 0, PI / 2), role, ex)
+    end
+
+    function S.ball(d, cf, role, ex)
+        add(Enum.PartType.Ball, V3(d, d, d), cf, role, ex)
+    end
+
+    function S.block(size, cf, role, ex)
+        add(Enum.PartType.Block, size, cf, role, ex)
+    end
+
+    -- arbitrary triangle a-b-c made from two wedges
+    function S.tri(a, b, c, role)
+        local ab, ac, bc = b - a, c - a, c - b
+        local abd, acd, bcd = ab:Dot(ab), ac:Dot(ac), bc:Dot(bc)
+        if abd > acd and abd > bcd then
+            c, a = a, c
+        elseif acd > bcd and acd > abd then
+            a, b = b, a
+        end
+        ab, ac, bc = b - a, c - a, c - b
+
+        local n = ac:Cross(ab)
+        if n.Magnitude < 1e-6 or bc.Magnitude < 1e-6 then return end
+        local right = n.Unit
+        local up    = bc:Cross(right).Unit
+        local back  = bc.Unit
+
+        local height = math.abs(ab:Dot(up))
+        if height < 1e-4 then return end
+        local z1, z2 = math.abs(ab:Dot(back)), math.abs(ac:Dot(back))
+
+        if z1 > 1e-4 then
+            put({ wedge = true, size = V3(0.05, height, z1), role = role or "main",
+                cf = CFrame.fromMatrix((a + b) / 2, right, up, back) })
+        end
+        if z2 > 1e-4 then
+            put({ wedge = true, size = V3(0.05, height, z2), role = role or "main",
+                cf = CFrame.fromMatrix((a + c) / 2, -right, up, -back) })
+        end
+    end
+
+    function S.quad(a, b, c, d, role)
+        S.tri(a, b, c, role)
+        S.tri(a, c, d, role)
+    end
+
+    -- frustum (r1 at the bottom, r2 at the top) - used for curved horns
+    function S.frustum(r1, r2, h, cf, role, sides)
+        sides = sides or 6
+        local lo, hi = {}, {}
+        for i = 0, sides - 1 do
+            local ang = i / sides * PI * 2
+            lo[i] = cf * V3(math.cos(ang) * r1, 0, math.sin(ang) * r1)
+            hi[i] = cf * V3(math.cos(ang) * r2, h, math.sin(ang) * r2)
+        end
+        for i = 0, sides - 1 do
+            local j = (i + 1) % sides
+            S.quad(lo[i], lo[j], hi[j], hi[i], role)
+        end
+    end
+
+    -- cone: r = base radius, h = height, cf = base (tip points along +Y),
+    -- sides = face count, rim = { role =, frac = } optional contrasting band at the base
+    function S.cone(r, h, cf, role, sides, rim)
+        sides = sides or 32
+        local apex = cf * V3(0, h, 0)
+        local function ring(frac)
+            local rr, y = r * (1 - frac), h * frac
+            local pts = {}
+            for i = 0, sides - 1 do
+                local a = i / sides * PI * 2
+                pts[i] = cf * V3(math.cos(a) * rr, y, math.sin(a) * rr)
+            end
+            return pts
+        end
+        local base = ring(0)
+        local top = rim and ring(rim.frac) or base
+        for i = 0, sides - 1 do
+            local j = (i + 1) % sides
+            S.tri(apex, top[i], top[j], role)
+            if rim then
+                S.tri(base[i], base[j], top[i], rim.role)
+                S.tri(base[j], top[j], top[i], rim.role)
+            end
+        end
+    end
+
+    return S
+end
+
+----------------------------------------------------------------------
+-- GEAR: state + forward declarations
+----------------------------------------------------------------------
+local worn, pending = {}, {}
+local armorWorn, armorPending = {}, {}
+local selectedHats, selectedArmor = {}, {}
+local armorRoot
+local gearConn
+
+local applyHatOffsets, removeHat, addHat, syncHats, hatLook, rebuildHats
+local removeArmor, syncArmor, armorLook, clearArmor
+
+----------------------------------------------------------------------
+-- HAT DEFINITIONS
+-- fn(S, T): S.cone / S.cyl / S.ball / S.block build the hat,
+-- T is the height of the top of the head.
+-- Roles: "main" = main color, "accent" = accent color, "glow" = neon accent.
+----------------------------------------------------------------------
+local ScriptHats, ScriptHatNames = {}, {}
+
+local function defHat(name, fn)
+    ScriptHats[name] = fn
+    ScriptHatNames[#ScriptHatNames + 1] = name
+end
+
+defHat("Chinahat", function(S, T)
+    S.cone(1.65, 0.9, CF(0, T - 0.08, 0), "main", 32, { role = "accent", frac = 0.07 })
+    S.ball(0.2, CF(0, T + 0.84, 0), "accent")
+end)
+
+defHat("Wizard Hat", function(S, T)
+    S.cyl(3.0, 0.12, CF(0, T + 0.03, 0), "main")
+    S.cone(0.85, 2.4, CF(0, T + 0.09, 0), "main", 32)
+    S.cyl(1.78, 0.24, CF(0, T + 0.21, 0), "accent")
+end)
+
+defHat("Halo", function(S, T)
+    local n, r = 26, 0.95
+    for i = 0, n - 1 do
+        local a = i / n * PI * 2
+        S.block(V3(0.2, 0.1, 0.27),
+            CF(math.cos(a) * r, T + 0.95, math.sin(a) * r) * CFrame.Angles(0, -a, 0),
+            "glow", { bob = 0.05 })
+    end
+end)
+
+defHat("Crown", function(S, T)
+    S.cyl(1.5, 0.35, CF(0, T + 0.1, 0), "main")
+    for i = 0, 7 do
+        local a = i / 8 * PI * 2
+        local x, z = math.cos(a) * 0.62, math.sin(a) * 0.62
+        S.block(V3(0.2, 0.45, 0.2), CF(x, T + 0.5, z), "main")
+        S.ball(0.22, CF(x, T + 0.78, z), "glow")
+    end
+    S.ball(0.26, CF(0, T + 0.1, -0.76), "glow")
+end)
+
+defHat("Top Hat", function(S, T)
+    S.cyl(2.1, 0.1, CF(0, T + 0.02, 0), "main")
+    S.cyl(1.5, 1.0, CF(0, T + 0.5, 0), "main")
+    S.cyl(1.54, 0.22, CF(0, T + 0.18, 0), "accent")
+end)
+
+defHat("Horns", function(S, T)
+    for _, s in ipairs({ 1, -1 }) do
+        S.cone(0.2, 0.9, CF(s * 0.32, T - 0.03, 0) * CFrame.Angles(0, 0, -s * 0.4), "main", 16)
+    end
+end)
+
+defHat("Cat Ears", function(S, T)
+    for _, s in ipairs({ 1, -1 }) do
+        local g = CF(s * 0.34, T - 0.05, 0) * CFrame.Angles(0, 0, -s * 0.3)
+        S.cone(0.3, 0.62, g, "main", 18)
+        S.cone(0.17, 0.46, g * CF(0, 0, -0.13), "accent", 14)
+    end
+end)
+
+defHat("Propeller Cap", function(S, T)
+    S.ball(1.15, CF(0, T, 0), "main")
+    S.block(V3(0.95, 0.08, 0.55), CF(0, T - 0.02, -0.72), "accent")
+    S.cyl(0.1, 0.22, CF(0, T + 0.62, 0), "accent")
+    S.ball(0.16, CF(0, T + 0.58, 0), "accent")
+    S.block(V3(1.9, 0.05, 0.24), CF(0, T + 0.75, 0), "accent", { spin = 14 })
+    S.block(V3(1.9, 0.05, 0.24), CF(0, T + 0.75, 0) * CFrame.Angles(0, PI / 2, 0), "accent", { spin = 14 })
+end)
+
+----------------------------------------------------------------------
+-- ARMOR DEFINITIONS  ("Lich King" style, no sword)
+-- build(S, c, x):
+--   c = { hx, hy, hz }  half-size of the body part the piece is attached to
+--   x = { s = +1/-1 (right/left side), rig = "R6"/"R15", name = part name }
+-- Roles: main (steel), trim (silver edges), glow (neon runes),
+--        cloth (cloak), fur (fur collar)
+----------------------------------------------------------------------
+local ArmorByName, ArmorNames = {}, {}
+
+local function defArmor(name, attach, build)
+    ArmorByName[name] = { name = name, attach = attach, build = build }
+    ArmorNames[#ArmorNames + 1] = name
+end
+
+defArmor("Lich King Helm", function() return { "Head" } end, function(S, c)
+    local w, h = math.min(c.hx, c.hz), c.hy
+
+    -- skull of the helm and dome
+    S.cyl(w * 2.9, h * 2.1, CF(0, 0.02, 0), "main")
+    S.cone(w * 1.45, h * 0.95, CF(0, h * 1.07, 0), "main", 12)
+    S.cyl(w * 3.05, h * 0.16, CF(0, h * 1.05, 0), "trim")
+
+    -- face mask
+    S.block(V3(w * 2.5, h * 0.34, 0.1), CF(0, h * 0.32, -w * 1.47), "main")
+    S.block(V3(w * 0.34, h * 1.1, 0.12), CF(0, -h * 0.15, -w * 1.5), "trim")
+    S.block(V3(w * 1.9, h * 0.5, 0.1), CF(0, -h * 0.78, -w * 1.36), "main")
+    S.block(V3(w * 1.0, h * 0.06, 0.05), CF(0, -h * 0.66, -w * 1.43), "glow")
+    for _, sx in ipairs({ 1, -1 }) do
+        S.block(V3(w * 0.8, h * 1.2, 0.08), CF(sx * w * 1.05, -h * 0.2, -w * 1.1) * CFrame.Angles(0, -sx * 0.5, 0), "trim")
+        S.block(V3(w * 0.6, h * 0.13, 0.05), CF(sx * w * 0.6, h * 0.2, -w * 1.58) * CFrame.Angles(0, 0, sx * 0.3), "glow")
+    end
+    S.ball(h * 0.45, CF(0, h * 0.82, -w * 1.5), "glow", { light = true })
+
+    -- crown of spikes (taller at the back, lower at the front)
+    for _, a in ipairs({ 0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4 }) do
+        local spikeH = h * (3.1 - 0.62 * math.abs(a))
+        local r = w * 1.22
+        S.cone(w * 0.3, spikeH,
+            CF(math.sin(a) * r, h * 1.02, math.cos(a) * r) * CFrame.Angles(0, a, 0) * CFrame.Angles(0.32, 0, 0),
+            "trim", 5)
+    end
+
+    -- two large curved horns
+    for _, sx in ipairs({ 1, -1 }) do
+        local g = CF(sx * w * 1.35, h * 0.55, w * 0.2) * CFrame.Angles(0.35, 0, -sx * 1.05)
+        S.frustum(w * 0.34, w * 0.24, h * 1.3, g, "main", 5)
+        local g2 = g * CF(0, h * 1.3, 0) * CFrame.Angles(0, 0, sx * 0.85)
+        S.frustum(w * 0.24, w * 0.13, h * 1.3, g2, "main", 5)
+        local g3 = g2 * CF(0, h * 1.3, 0) * CFrame.Angles(0, 0, sx * 0.35)
+        S.cone(w * 0.13, h * 1.2, g3, "trim", 5)
+    end
+end)
+
+defArmor("Pauldrons", function(rig)
+    return rig == "R15" and { "RightUpperArm", "LeftUpperArm" } or { "Right Arm", "Left Arm" }
+end, function(S, c, x)
+    local s, top = x.s, c.hy
+    -- stacked plates
+    for i = 0, 2 do
+        S.block(V3(2.1 - i * 0.45, 0.13, 1.95 - i * 0.4),
+            CF(s * (0.3 - i * 0.04), top + 0.06 + i * 0.2, 0) * CFrame.Angles(0, 0, -s * (0.44 - i * 0.07)),
+            i == 1 and "trim" or "main")
+    end
+    -- top spikes
+    for _, q in ipairs({ { 0, 1.35 }, { -0.5, 0.9 }, { 0.5, 0.9 } }) do
+        S.cone(0.21, q[2], CF(s * 0.32, top + 0.42, q[1]) * CFrame.Angles(q[1] * 0.9, 0, -s * 0.5), "main", 5)
+    end
+    -- side spikes
+    for _, z in ipairs({ -0.62, 0, 0.62 }) do
+        S.cone(0.13, z == 0 and 0.8 or 0.55, CF(s * 1.22, top - 0.36, z) * CFrame.Angles(0, 0, -s * 1.3), "trim", 4)
+    end
+    S.ball(0.26, CF(s * 0.32, top + 0.5, 0), "glow")
+    S.block(V3(0.07, 0.07, 1.8), CF(s * 1.25, top - 0.37, 0) * CFrame.Angles(0, 0, -s * 0.44), "glow")
+end)
+
+defArmor("Chestplate", function(rig)
+    return rig == "R15" and { "UpperTorso" } or { "Torso" }
+end, function(S, c)
+    local hx, hy, hz = c.hx, c.hy, c.hz
+    -- breast plates with glowing edges
+    for _, sx in ipairs({ 1, -1 }) do
+        S.block(V3(hx * 0.96, hy * 0.72, 0.14),
+            CF(sx * hx * 0.49, hy * 0.28, -hz - 0.08) * CFrame.Angles(0, -sx * 0.22, 0), "main")
+        S.block(V3(hx * 0.9, 0.05, 0.05), CF(sx * hx * 0.5, hy * 0.65, -hz - 0.13), "glow")
+    end
+    -- center ridge and core
+    S.block(V3(0.16, hy * 1.25, 0.16), CF(0, hy * 0.2, -hz - 0.15) * CFrame.Angles(0, PI / 4, 0), "trim")
+    S.ball(0.3, CF(0, hy * 0.45, -hz - 0.22), "glow", { light = true })
+    S.cyl(0.54, 0.07, CF(0, hy * 0.45, -hz - 0.18) * CFrame.Angles(PI / 2, 0, 0), "trim")
+    -- ab plates
+    for i = 0, 2 do
+        S.block(V3(hx * (1.62 - i * 0.2), hy * 0.27, 0.1),
+            CF(0, -hy * 0.2 - i * hy * 0.3, -hz - 0.06) * CFrame.Angles(-0.1, 0, 0),
+            i == 1 and "trim" or "main")
+    end
+    -- fur collar
+    for i = 0, 11 do
+        local a = i / 12 * PI * 2
+        S.ball(0.55, CF(math.cos(a) * hx * 0.62, hy + 0.04, math.sin(a) * hz * 1.15), "fur")
+    end
+    -- back plate
+    S.block(V3(hx * 1.9, hy * 1.55, 0.12), CF(0, hy * 0.08, hz + 0.07), "main")
+    S.block(V3(0.12, hy * 1.55, 0.12), CF(0, hy * 0.08, hz + 0.14) * CFrame.Angles(0, PI / 4, 0), "trim")
+end)
+
+defArmor("Belt & Tassets", function(rig)
+    return rig == "R15" and { "LowerTorso" } or { "Torso" }
+end, function(S, c, x)
+    local hx, hz = c.hx, c.hz
+    local y0 = (x.rig == "R6") and (-c.hy + 0.32) or 0
+    S.block(V3(hx * 2.08, 0.3, hz * 2.25), CF(0, y0, 0), "main")
+    S.block(V3(hx * 2.12, 0.05, hz * 2.3), CF(0, y0 + 0.17, 0), "trim")
+    S.block(V3(hx * 2.12, 0.05, hz * 2.3), CF(0, y0 - 0.17, 0), "trim")
+    S.ball(0.44, CF(0, y0 + 0.02, -hz - 0.12), "trim")
+    S.block(V3(0.28, 0.12, 0.16), CF(0, y0 - 0.2, -hz - 0.12), "trim")
+    for _, sx in ipairs({ 1, -1 }) do
+        S.block(V3(0.11, 0.07, 0.05), CF(sx * 0.1, y0 + 0.05, -hz - 0.33), "glow")
+        S.block(V3(0.55, 0.85, 0.1), CF(sx * 0.68, y0 - 0.52, -hz - 0.08) * CFrame.Angles(-0.06, -sx * 0.4, 0), "main")
+        S.cone(0.15, 0.85, CF(sx * (hx + 0.08), y0 + 0.05, 0) * CFrame.Angles(0, 0, -sx * 1.2), "trim", 4)
+    end
+    S.block(V3(0.62, 0.95, 0.1), CF(0, y0 - 0.58, -hz - 0.12) * CFrame.Angles(-0.08, 0, 0), "main")
+    S.block(V3(0.62, 0.07, 0.12), CF(0, y0 - 0.2, -hz - 0.13), "trim")
+    S.block(V3(hx * 1.5, 0.9, 0.1), CF(0, y0 - 0.55, hz + 0.12), "main")
+end)
+
+defArmor("Vambraces & Gauntlets", function(rig)
+    return rig == "R15" and { "RightLowerArm", "LeftLowerArm", "RightHand", "LeftHand" } or { "Right Arm", "Left Arm" }
+end, function(S, c, x)
+    local s = x.s
+    if x.name:find("Hand") then
+        S.block(V3(1.18, 0.3, 1.18), CF(0, c.hy * 0.4, 0), "main")
+        for _, dx in ipairs({ -0.3, 0, 0.3 }) do
+            S.cone(0.09, 0.4, CF(dx, 0, -0.52) * CFrame.Angles(-PI / 2 + 0.25, 0, 0), "trim", 4)
+        end
+        return
+    end
+    local yc  = (x.rig == "R6") and (-c.hy * 0.5 - 0.02) or 0
+    local len = (x.rig == "R6") and 0.92 or (c.hy * 2 * 0.88)
+    S.cyl(1.46, len, CF(0, yc, 0), "main")
+    S.cyl(1.54, 0.1, CF(0, yc + len / 2 - 0.05, 0), "trim")
+    S.cyl(1.54, 0.1, CF(0, yc - len / 2 + 0.05, 0), "trim")
+    S.cyl(1.5, 0.05, CF(0, yc, 0), "glow")
+    -- outer fin
+    S.tri(V3(s * 0.72, yc + len * 0.5, 0), V3(s * 0.72, yc - len * 0.35, 0), V3(s * 1.55, yc - len * 0.7, 0), "trim")
+    S.tri(V3(s * 0.72, yc + len * 0.55, 0), V3(s * 0.72, yc + len * 0.12, 0), V3(s * 1.2, yc + len * 0.22, 0), "trim")
+    -- elbow spike
+    S.cone(0.16, 0.62, CF(s * 0.35, yc + len / 2, 0.42) * CFrame.Angles(PI / 2 - 0.2, 0, -s * 0.4), "main", 4)
+end)
+
+defArmor("Legs (Cuisses & Greaves)", function(rig)
+    return rig == "R15" and { "RightUpperLeg", "LeftUpperLeg", "RightLowerLeg", "LeftLowerLeg" } or { "Right Leg", "Left Leg" }
+end, function(S, c, x)
+    local s = x.s
+
+    local function thigh(yc, hh)
+        S.cyl(1.48, hh, CF(0, yc, 0), "main")
+        S.block(V3(0.95, hh * 0.9, 0.1), CF(0, yc, -0.79), "trim")
+        S.cyl(1.56, 0.1, CF(0, yc + hh / 2 - 0.05, 0), "trim")
+        S.cone(0.14, 0.55, CF(s * 0.72, yc, 0) * CFrame.Angles(0, 0, -s * 1.3), "main", 4)
+    end
+
+    local function shin(yc, hh, kneeY)
+        S.cyl(1.46, hh, CF(0, yc, 0), "main")
+        S.block(V3(0.15, hh * 0.9, 0.15), CF(0, yc, -0.77) * CFrame.Angles(0, PI / 4, 0), "trim")
+        S.cyl(1.54, 0.1, CF(0, yc - hh / 2 + 0.05, 0), "trim")
+        S.cone(0.22, 0.75, CF(0, kneeY, -0.76) * CFrame.Angles(-PI / 2 + 0.4, 0, 0), "main", 4)
+    end
+
+    if x.rig == "R6" then
+        thigh(0.52, 0.9)
+        shin(-0.52, 0.9, -0.02)
+    elseif x.name:find("Upper") then
+        thigh(0, c.hy * 2 * 0.9)
+    else
+        shin(0, c.hy * 2 * 0.92, c.hy * 0.85)
+    end
+end)
+
+defArmor("Boots", function(rig)
+    return rig == "R15" and { "RightFoot", "LeftFoot" } or { "Right Leg", "Left Leg" }
+end, function(S, c, x)
+    local y0 = (x.rig == "R6") and (-c.hy + 0.28) or 0
+    S.block(V3(1.3, 0.52, 1.5), CF(0, y0, -0.12), "main")
+    S.block(V3(1.12, 0.3, 0.5), CF(0, y0 - 0.02, -0.82) * CFrame.Angles(-0.25, 0, 0), "trim")
+    S.cone(0.12, 0.6, CF(0, y0 - 0.02, -1.05) * CFrame.Angles(-PI / 2 + 0.15, 0, 0), "trim", 4)
+    S.cone(0.12, 0.45, CF(0, y0 + 0.12, 0.7) * CFrame.Angles(PI / 2 - 0.2, 0, 0), "main", 4)
+    S.block(V3(1.32, 0.05, 0.05), CF(0, y0 + 0.1, -0.88), "glow")
+end)
+
+defArmor("Cloak", function(rig)
+    return rig == "R15" and { "UpperTorso" } or { "Torso" }
+end, function(S, c)
+    local hx, hy, hz = c.hx, c.hy, c.hz
+    local cols, rows = 5, 8
+    local rowH = (hy * 2 + 2.9) / rows
+    local widthTop, widthBot = hx * 2 + 0.5, hx * 2 + 1.9
+
+    local xs = {}
+    for ci = 1, cols do
+        xs[ci] = (ci - (cols + 1) / 2) * (widthTop / cols)
+    end
+
+    for ci = 1, cols do
+        for r = 1, rows do
+            S.setChain(ci, r)
+            local w = (widthTop + (widthBot - widthTop) * (r - 1) / (rows - 1)) / cols
+            S.block(V3(w * 1.25, rowH * 1.1, 0.07), CF(0, -rowH / 2, (ci % 2) * 0.012),
+                r == 1 and "fur" or "cloth")
+        end
+        -- ragged bottom edge
+        S.setChain(ci, rows)
+        local w = widthBot / cols
+        local l1 = 0.5 + 0.22 * math.sin(ci * 2.3)
+        local l2 = 0.5 + 0.22 * math.sin(ci * 3.7 + 1)
+        S.tri(V3(-w * 0.62, -rowH * 1.02, 0), V3(0, -rowH * 1.02, 0), V3(-w * 0.31, -rowH - l1, 0), "cloth")
+        S.tri(V3(0, -rowH * 1.02, 0), V3(w * 0.62, -rowH * 1.02, 0), V3(w * 0.31, -rowH - l2, 0), "cloth")
+    end
+    S.setChain(nil)
+
+    local cl = {
+        base = CF(0, hy - 0.1, hz + 0.28), cols = cols, rows = rows, rowH = rowH, xs = xs,
+        aX = {}, aZ = {}, chain = {},
+    }
+    for ci = 1, cols do cl.chain[ci] = {} end
+    for r = 1, rows do cl.aX[r], cl.aZ[r] = 0, 0 end
+    S.meta.cloak = cl
+end)
+
+local ArmorPresets = {
+    ["Lich King"]    = { Main = rgb(40, 47, 66),   Trim = rgb(150, 170, 200), Glow = rgb(90, 210, 255),  Cloth = rgb(20, 40, 100), Fur = rgb(205, 210, 220) },
+    ["Blood Knight"] = { Main = rgb(55, 15, 20),   Trim = rgb(210, 170, 70),  Glow = rgb(255, 70, 50),   Cloth = rgb(110, 15, 20), Fur = rgb(230, 225, 215) },
+    ["Fel"]          = { Main = rgb(30, 40, 30),   Trim = rgb(120, 150, 110), Glow = rgb(110, 255, 90),  Cloth = rgb(25, 60, 35),  Fur = rgb(190, 200, 180) },
+    ["Silver Hand"]  = { Main = rgb(205, 210, 222), Trim = rgb(235, 190, 70), Glow = rgb(255, 230, 140), Cloth = rgb(30, 70, 160), Fur = rgb(240, 240, 245) },
+}
+local ArmorPresetNames = { "Lich King", "Blood Knight", "Fel", "Silver Hand" }
+
+----------------------------------------------------------------------
+-- GEAR: part spawning
+----------------------------------------------------------------------
+local function destroyEntry(e)
+    if e.conn then e.conn:Disconnect() end
+    pcall(function() e.model:Destroy() end)
+end
+
+-- creates real Parts from the specs and welds them to `attach`
+local function spawnParts(specs, attach, sc)
+    local model = Instance.new("Model")
+    model.Name = "WE_Gear"
+    local entry = { model = model, parts = {}, anim = {}, base = CF() }
+
+    for _, s in ipairs(specs) do
+        local p = Instance.new(s.wedge and "WedgePart" or "Part")
+        if s.shape then p.Shape = s.shape end
+        p.Size = V3(
+            math.max(s.size.X * sc, 0.05),
+            math.max(s.size.Y * sc, 0.05),
+            math.max(s.size.Z * sc, 0.05))
+        p.Name = "WE_GearPart"
+        p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+        p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
+        p.CastShadow = false
+
+        local cf = CF(s.cf.Position * sc) * s.cf.Rotation
+        local w = Instance.new("Weld")
+        w.Part0, w.Part1, w.C0 = attach, p, cf
+        w.Parent = p
+
+        local rec = {
+            part = p, weld = w, cf = cf, role = s.role,
+            spin = s.spin, bob = s.bob and s.bob * sc, chain = s.chain,
+        }
+        if s.light then
+            local l = Instance.new("PointLight")
+            l.Range, l.Brightness, l.Shadows = 9, 1, false
+            l.Parent = p
+            rec.lightObj = l
+        end
+
+        p.Parent = model
+        entry.parts[#entry.parts + 1] = rec
+        if rec.spin or rec.bob or rec.chain then
+            entry.anim[#entry.anim + 1] = rec
+        end
+    end
+    return entry
+end
+
+----------------------------------------------------------------------
+-- HATS: logic
+----------------------------------------------------------------------
+function removeHat(key)
+    local e = worn[key]
+    worn[key] = nil
+    if e then destroyEntry(e) end
+end
+
+function hatLook()
+    local H, Ch = Config.Hat, Config.Character
+    local main, accent = H.Color, H.Accent
+    if H.Rainbow then
+        local t = tick()
+        main   = Color3.fromHSV((t % 4) / 4, 1, 1)
+        accent = Color3.fromHSV(((t + 2) % 4) / 4, 1, 1)
+    end
+    local mat = Enum.Material[H.Material]
+
+    for _, hat in pairs(worn) do
+        for _, e in ipairs(hat.parts) do
+            local p = e.part
+            if p.Parent then
+                local col = (e.role == "main") and main or accent
+                local m = (e.role == "glow" or H.Neon) and Enum.Material.Neon or mat
+                if p.Color ~= col then p.Color = col end
+                if p.Material ~= m then p.Material = m end
+                if p.Transparency ~= H.Transparency then p.Transparency = H.Transparency end
+            end
+        end
+        local hl = hat.model:FindFirstChild("WE_HatHL")
+        if H.Highlight then
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name = "WE_HatHL"
+                hl.Adornee = hat.model
+                hl.Parent = hat.model
+            end
+            hl.FillColor, hl.OutlineColor, hl.FillTransparency = Ch.Fill, Ch.Outline, Ch.FillTransparency
+        elseif hl then
+            hl:Destroy()
+        end
+    end
+end
+
+function applyHatOffsets()
+    local base = CF(0, Config.Character.HatY, -Config.Character.HatZ)
+    for _, hat in pairs(worn) do
+        hat.base = base
+        for _, e in ipairs(hat.parts) do
+            if e.weld.Parent and not (e.spin or e.bob) then
+                e.weld.C0 = base * e.cf
+            end
+        end
+    end
+end
+
+local function hatTick()
+    local t = tick()
+    for _, hat in pairs(worn) do
+        for _, e in ipairs(hat.anim) do
+            if e.weld.Parent then
+                if e.spin then
+                    e.weld.C0 = hat.base * CF(e.cf.Position) * CFrame.Angles(0, t * e.spin, 0) * e.cf.Rotation
+                elseif e.bob then
+                    e.weld.C0 = hat.base * CF(0, math.sin(t * 2.2) * e.bob, 0) * e.cf
+                end
+            end
+        end
+    end
+    if Config.Hat.Rainbow then hatLook() end
+end
+
+----------------------------------------------------------------------
+-- ARMOR: cloak physics
+-- every row is a hinge; angles follow the character's velocity
+----------------------------------------------------------------------
+local function cloakStep(e, dt, t, root)
+    local cl, A = e.cloak, Config.Armor
+    local vf, vx, vy = 0, 0, 0
+    if root and e.attach.Parent then
+        local rel = e.attach.CFrame:VectorToObjectSpace(root.AssemblyLinearVelocity)
+        vf, vx, vy = -rel.Z, rel.X, rel.Y
+    end
+    vf, vx, vy = math.clamp(vf, -40, 40), math.clamp(vx, -40, 40), math.clamp(vy, -80, 80)
+
+    local sway = A.CloakSway
+    local targetX = -math.clamp(vf * 0.045 + math.max(-vy, 0) * 0.012, -0.15, 1.15) * sway
+    local targetZ = -vx * 0.02 * sway
+    local n, aX, aZ = cl.rows, cl.aX, cl.aZ
+
+    for r = 1, n do
+        local k = math.min(1, dt * (16 - r * 1.3))
+        local flutter = math.sin(t * 2.1 + r * 0.8) * 0.035 * sway * (0.4 + r / n)
+        aX[r] = aX[r] + (targetX * (r / n) + flutter - aX[r]) * k
+        aZ[r] = aZ[r] + (targetZ * (r / n) - aZ[r]) * k
+    end
+
+    for ci = 1, cl.cols do
+        local cf = CF(cl.xs[ci], 0, 0)
+        local flare = (ci - (cl.cols + 1) / 2) * 0.022
+        local row = cl.chain[ci]
+        for r = 1, n do
+            local px = r > 1 and aX[r - 1] or 0
+            local pz = r > 1 and aZ[r - 1] or 0
+            cf = cf * CFrame.Angles(aX[r] - px, 0, aZ[r] - pz + flare)
+            row[r] = cf
+            cf = cf * CF(0, -cl.rowH, 0)
+        end
+    end
+
+    for _, rec in ipairs(e.anim) do
+        local ch = rec.chain
+        if ch and rec.weld.Parent then
+            rec.weld.C0 = cl.base * cl.chain[ch.c][ch.r] * rec.cf
+        end
+    end
+end
+
+local function armorTick(dt)
+    local t = tick()
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    for _, e in pairs(armorWorn) do
+        if e.cloak then cloakStep(e, dt, t, root) end
+    end
+end
+
+-- one shared loop for all gear; disconnects itself when nothing is worn
+local function ensureLoop()
+    if gearConn then return end
+    gearConn = RunService.RenderStepped:Connect(function(dt)
+        local anyHat, anyArmor = next(worn) ~= nil, next(armorWorn) ~= nil
+        if not anyHat and not anyArmor then
+            gearConn:Disconnect()
+            gearConn = nil
+            return
+        end
+        if anyHat then hatTick() end
+        if anyArmor then armorTick(dt) end
+    end)
+end
+
+function addHat(key)
+    if worn[key] or pending[key] then return end
+    local fn = ScriptHats[key]
+    if not fn then return end
+    pending[key] = true
+
+    task.spawn(function()
+        local char = lp.Character
+        local head = char and char:WaitForChild("Head", 5)
+        pending[key] = nil
+        if destroyed then return end
+        if not head or worn[key] then
+            if not head then notify("Hats", "No character/head found - equip the hat after respawning.") end
+            return
+        end
+
+        local specs = {}
+        local S = makeBuilder(specs)
+        local sc = Config.Hat.Scale * math.min(head.Size.X, head.Size.Z)   -- fits R6 and R15 heads
+        fn(S, head.Size.Y / 2 / sc)
+
+        local entry = spawnParts(specs, head, sc)
+        entry.model.Name = "WE_Hat"
+        entry.model.Parent = workspace
+        entry.conn = head.Destroying:Connect(function()
+            if worn[key] == entry then removeHat(key) else destroyEntry(entry) end
+        end)
+        worn[key] = entry
+
+        applyHatOffsets()
+        hatLook()
+        ensureLoop()
+    end)
+end
+
+function syncHats()
+    local want = {}
+    for _, name in ipairs(selectedHats) do
+        if ScriptHats[name] then want[name] = true end
+    end
+    for key, e in pairs(worn) do
+        if not want[key] or not e.model.Parent then removeHat(key) end
+    end
+    for key in pairs(want) do addHat(key) end
+end
+
+local rebuildToken = 0
+function rebuildHats()      -- rebuild after a size change (debounced to avoid lag)
+    rebuildToken = rebuildToken + 1
+    local mine = rebuildToken
+    task.delay(0.3, function()
+        if mine ~= rebuildToken or destroyed then return end
+        for key in pairs(worn) do removeHat(key) end
+        syncHats()
+    end)
+end
+
+----------------------------------------------------------------------
+-- ARMOR: logic
+----------------------------------------------------------------------
+local function rigOf(char)
+    return char:FindFirstChild("UpperTorso") and "R15" or "R6"
+end
+
+local function getArmorRoot()
+    if not (armorRoot and armorRoot.Parent) then
+        armorRoot = Instance.new("Model")
+        armorRoot.Name = "WE_Armor"
+        armorRoot.Parent = workspace
+    end
+    return armorRoot
+end
+
+function removeArmor(key)
+    local e = armorWorn[key]
+    armorWorn[key] = nil
+    if e then destroyEntry(e) end
+end
+
+function clearArmor()
+    for key in pairs(armorWorn) do removeArmor(key) end
+    if armorRoot then
+        armorRoot:Destroy()
+        armorRoot = nil
+    end
+end
+
+function armorLook()
+    local A, Ch = Config.Armor, Config.Character
+    local palette = { main = A.Main, trim = A.Trim, glow = A.Glow, cloth = A.Cloth, fur = A.Fur }
+    local mat = Enum.Material[A.Material]
+
+    for _, e in pairs(armorWorn) do
+        for _, r in ipairs(e.parts) do
+            local p = r.part
+            if p.Parent then
+                local role = r.role
+                local col = palette[role] or A.Main
+                local m = mat
+                if role == "glow" then
+                    m = Enum.Material.Neon
+                elseif role == "cloth" or role == "fur" then
+                    m = Enum.Material.Fabric
+                end
+                local tr = (role == "glow") and math.min(A.Transparency, 0.6) or A.Transparency
+                if p.Color ~= col then p.Color = col end
+                if p.Material ~= m then p.Material = m end
+                if p.Transparency ~= tr then p.Transparency = tr end
+            end
+            if r.lightObj then
+                r.lightObj.Color = A.Glow
+                r.lightObj.Brightness = A.GlowLight
+            end
+        end
+    end
+
+    if armorRoot and armorRoot.Parent then
+        local hl = armorRoot:FindFirstChild("WE_ArmorHL")
+        if A.Highlight then
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name = "WE_ArmorHL"
+                hl.Adornee = armorRoot
+                hl.Parent = armorRoot
+            end
+            hl.FillColor, hl.OutlineColor, hl.FillTransparency = Ch.Fill, Ch.Outline, Ch.FillTransparency
+        elseif hl then
+            hl:Destroy()
+        end
+    end
+end
+
+local function addArmor(key, piece, partName)
+    if armorWorn[key] or armorPending[key] then return end
+    armorPending[key] = true
+
+    task.spawn(function()
+        local char = lp.Character
+        local part = char and char:WaitForChild(partName, 5)
+        armorPending[key] = nil
+        if destroyed or not part or armorWorn[key] then return end
+
+        local specs = {}
+        local S = makeBuilder(specs)
+        local sz = part.Size
+        piece.build(S,
+            { hx = sz.X / 2, hy = sz.Y / 2, hz = sz.Z / 2, part = part },
+            { s = partName:find("Left") and -1 or 1, rig = rigOf(char), name = partName })
+
+        local entry = spawnParts(specs, part, 1)
+        entry.attach, entry.cloak = part, S.meta.cloak
+        entry.model.Name = "WE_Armor_" .. piece.name
+        entry.model.Parent = getArmorRoot()
+        entry.conn = part.Destroying:Connect(function()
+            if armorWorn[key] == entry then removeArmor(key) else destroyEntry(entry) end
+        end)
+        armorWorn[key] = entry
+
+        if entry.cloak then
+            cloakStep(entry, 1, tick(), char:FindFirstChild("HumanoidRootPart"))
+        end
+        armorLook()
+        ensureLoop()
+    end)
+end
+
+function syncArmor()
+    local want = {}
+    local char = lp.Character
+    if char then
+        local rig = rigOf(char)
+        for _, pieceName in ipairs(selectedArmor) do
+            local piece = ArmorByName[pieceName]
+            if piece then
+                for _, partName in ipairs(piece.attach(rig)) do
+                    want[pieceName .. "|" .. partName] = { piece, partName }
+                end
+            end
+        end
+    end
+    for key, e in pairs(armorWorn) do
+        if not want[key] or not e.model.Parent then removeArmor(key) end
+    end
+    for key, v in pairs(want) do addArmor(key, v[1], v[2]) end
+
+    if next(armorWorn) == nil and next(armorPending) == nil and armorRoot then
+        armorRoot:Destroy()
+        armorRoot = nil
+    end
+end
+
+local function clearAllGear()
+    for key in pairs(worn) do removeHat(key) end
+    clearArmor()
+    table.clear(pending)
+    table.clear(armorPending)
+end
+
+----------------------------------------------------------------------
+-- UI
+----------------------------------------------------------------------
+ui = Rayfield:CreateWindow({
+    name = "World Editor",
+    subtitle = "client-side visuals",
+    theme = "amethyst",
+    sidebarLayout = true,
+    configuration = {
+        autoSave = true,
+        autoLoad = true,
+        fileName = "WorldEditor",
+        customFolder = "WorldEditor",
+    },
+})
+
+weatherTag = ui:CreateTag({ text = "Weather: off", color = rgb(110, 110, 130) })
+presetTag  = ui:CreateTag({ text = "Preset: -", color = rgb(120, 100, 200) })
+
+-- registry of controls so they can be refreshed after a preset / config load
+local controls = {}
+
+local function track(handle, tbl, key, min, max)
+    controls[#controls + 1] = { h = handle, t = tbl, k = key, min = min, max = max }
+end
+
+local function refreshControls()
+    for _, c in ipairs(controls) do
+        local v = c.t[c.k]
+        if c.min then v = math.clamp(v, c.min, c.max) end
+        pcall(function() c.h:Set(v, true) end)
+    end
+    syncWeatherUI()
+end
+
+local function addSlider(tab, name, prefix, tbl, key, min, max, inc, suffix, onChange)
+    local h = tab:CreateSlider({
+        name = name,
+        flag = prefix .. "_" .. key,
+        range = { min, max },
+        increment = inc,
+        value = math.clamp(tbl[key], min, max),
+        suffix = suffix,
+        callback = function(v)
+            tbl[key] = v
+            if onChange then onChange() end
+        end,
+    })
+    track(h, tbl, key, min, max)
+    return h
+end
+
+local function addToggle(tab, name, prefix, tbl, key, onChange)
+    local h = tab:CreateToggle({
+        name = name,
+        flag = prefix .. "_" .. key,
+        value = tbl[key] and true or false,
+        callback = function(v)
+            tbl[key] = v
+            if onChange then onChange() end
+        end,
+    })
+    track(h, tbl, key)
+    return h
+end
+
+local function addColor(tab, name, prefix, tbl, key, onChange)
+    local h = tab:CreateColorPicker({
+        name = name,
+        flag = prefix .. "_" .. key,
+        color = tbl[key],
+        callback = function(c)
+            tbl[key] = c
+            if onChange then onChange() end
+        end,
+    })
+    track(h, tbl, key)
+    return h
+end
+
+local function refreshAll()
+    applyVisuals()
+    updateWeather()
+    applyCharacter()
+end
+
+local function applyPreset(name)
+    local preset = PRESETS[name]
+    if not preset then return end
+    for _, cat in ipairs({ "Lighting", "Atmosphere", "Post", "Weather" }) do
+        local tbl = Config[cat]
+        for key in pairs(tbl) do tbl[key] = nil end
+        merge(tbl, deepCopy(DEFAULTS[cat]))
+    end
+    merge(Config, deepCopy(preset))
+    visualsEnabled = true
+    refreshAll()
+    refreshControls()
+    pcall(function() presetTag:Set({ text = "Preset: " .. name, color = rgb(120, 100, 200) }) end)
+end
+
+local function firstOf(v)
+    if type(v) == "table" then return v[1] end
+    return v
+end
+
+-- Presets -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Presets" })
+    tab:CreateSection({ name = "Ready-made worlds" })
+    local group = tab:CreateGroup()
+    for _, name in ipairs({ "Day", "Sunset", "Night", "Vaporwave", "Snow", "Storm", "Bloodmoon", "Mist" }) do
+        group:CreateButton({ name = name, callback = function() applyPreset(name) end })
+    end
+
+    tab:CreateSection({ name = "Control" })
+    tab:CreateButton({ name = "Hide menu (RightShift brings it back)", callback = function() ui:Hide() end })
+    tab:CreateButton({ name = "Disable everything and restore the game", callback = function() env.WorldEditor.Destroy() end })
+end
+
+-- Lighting -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Lighting" })
+    local L = Config.Lighting
+
+    tab:CreateSection({ name = "Time of day" })
+    addSlider(tab, "Time (ClockTime)", "Light", L, "ClockTime", 0, 24, 0.05)
+    addSlider(tab, "Day cycle speed (hours/sec)", "Light", L, "CycleSpeed", 0, 5, 0.05)
+
+    tab:CreateSection({ name = "Lighting colors" })
+    addColor(tab, "Ambient", "Light", L, "Ambient")
+    addColor(tab, "Outdoor Ambient", "Light", L, "OutdoorAmbient")
+    addColor(tab, "Color Shift Top", "Light", L, "ColorShift_Top")
+    addColor(tab, "Color Shift Bottom", "Light", L, "ColorShift_Bottom")
+
+    tab:CreateSection({ name = "Brightness" })
+    addSlider(tab, "Brightness", "Light", L, "Brightness", 0, 10, 0.05)
+    addSlider(tab, "Exposure", "Light", L, "ExposureCompensation", -3, 3, 0.05)
+    addToggle(tab, "Global shadows", "Light", L, "GlobalShadows")
+
+    tab:CreateSection({ name = "Fog" })
+    addToggle(tab, "Fog enabled", "Light", L, "FogOn")
+    addColor(tab, "Fog color", "Light", L, "FogColor")
+    addSlider(tab, "Fog start", "Light", L, "FogStart", 0, 2000, 5)
+    addSlider(tab, "Fog end", "Light", L, "FogEnd", 50, 5000, 10)
+end
+
+-- Sky -----------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Sky" })
+    local S = Config.Sky
+
+    tab:CreateSection({ name = "Custom skybox" })
+    addToggle(tab, "Use custom skybox", "Sky", S, "Enabled", enableVisuals)
+
+    local function normalizeId(text)
+        text = tostring(text):gsub("%s", "")
+        if text == "" then return "" end
+        if tonumber(text) then return "rbxassetid://" .. text end
+        return text
+    end
+
+    local faceInputs = {}
+    tab:CreateInput({
+        name = "One ID for all 6 sides",
+        placeholder = "quick test",
+        forgetState = true,
+        flag = "Sky_All",
+        callback = function(text)
+            local id = normalizeId(text)
+            if id == "" then return end
+            for _, key in ipairs({ "Bk", "Dn", "Ft", "Lf", "Rt", "Up" }) do
+                S[key] = id
+                if faceInputs[key] then
+                    pcall(function() faceInputs[key]:Set(id, true) end)
+                end
+            end
+            enableVisuals()
+        end,
+    })
+
+    for _, face in ipairs({
+        { "Bk", "Back" }, { "Ft", "Front" }, { "Lf", "Left" },
+        { "Rt", "Right" }, { "Up", "Up" }, { "Dn", "Down" },
+    }) do
+        faceInputs[face[1]] = tab:CreateInput({
+            name = face[2],
+            placeholder = "Image ID",
+            flag = "Sky_" .. face[1],
+            value = S[face[1]],
+            callback = function(text)
+                S[face[1]] = normalizeId(text)
+                enableVisuals()
+            end,
+        })
+    end
+
+    tab:CreateSection({ name = "Celestial bodies" })
+    addSlider(tab, "Stars", "Sky", S, "StarCount", 0, 5000, 50, nil, enableVisuals)
+    addSlider(tab, "Sun size", "Sky", S, "SunSize", 0, 60, 1, nil, enableVisuals)
+    addSlider(tab, "Moon size", "Sky", S, "MoonSize", 0, 60, 1, nil, enableVisuals)
+    addSlider(tab, "Skybox rotation", "Sky", S, "Rotation", 0, 360, 1, "°", enableVisuals)
+    addToggle(tab, "Sun and moon", "Sky", S, "CelestialBodies", enableVisuals)
+end
+
+-- Atmosphere -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Atmosphere" })
+    local A = Config.Atmosphere
+
+    tab:CreateSection({ name = "Atmosphere" })
+    addToggle(tab, "Atmosphere enabled", "Atmo", A, "Enabled", enableVisuals)
+    addSlider(tab, "Density", "Atmo", A, "Density", 0, 1, 0.01, nil, enableVisuals)
+    addSlider(tab, "Offset", "Atmo", A, "Offset", 0, 1, 0.01, nil, enableVisuals)
+    addColor(tab, "Color", "Atmo", A, "Color", enableVisuals)
+    addColor(tab, "Decay (horizon color)", "Atmo", A, "Decay", enableVisuals)
+    addSlider(tab, "Glare", "Atmo", A, "Glare", 0, 10, 0.05, nil, enableVisuals)
+    addSlider(tab, "Haze", "Atmo", A, "Haze", 0, 10, 0.05, nil, enableVisuals)
+end
+
+-- Post FX -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Post FX" })
+    local P = Config.Post
+
+    tab:CreateSection({ name = "Color correction" })
+    addToggle(tab, "Post effects enabled", "Post", P, "Enabled", enableVisuals)
+    addSlider(tab, "Saturation", "Post", P, "Saturation", -1, 2, 0.01, nil, enableVisuals)
+    addSlider(tab, "Contrast", "Post", P, "Contrast", -1, 1, 0.01, nil, enableVisuals)
+    addSlider(tab, "Brightness", "Post", P, "Brightness", -1, 1, 0.01, nil, enableVisuals)
+    addColor(tab, "Tint", "Post", P, "TintColor", enableVisuals)
+
+    tab:CreateSection({ name = "Bloom / sun rays / blur" })
+    addSlider(tab, "Bloom intensity", "Post", P, "Bloom", 0, 5, 0.05, nil, enableVisuals)
+    addSlider(tab, "Bloom size", "Post", P, "BloomSize", 0, 56, 1, nil, enableVisuals)
+    addSlider(tab, "Bloom threshold", "Post", P, "BloomThreshold", 0, 4, 0.05, nil, enableVisuals)
+    addSlider(tab, "Sun rays", "Post", P, "SunRays", 0, 1, 0.01, nil, enableVisuals)
+    addSlider(tab, "Blur", "Post", P, "Blur", 0, 30, 0.5, nil, enableVisuals)
+end
+
+-- Weather -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Weather" })
+    local W = Config.Weather
+
+    tab:CreateSection({ name = "What is falling now (lit = on)" })
+    local group = tab:CreateGroup()
+    for _, w in ipairs({
+        { "Rain", "Rain" }, { "Storm", "Thunderstorm" }, { "Snow", "Snow" },
+        { "Ash", "Ash" }, { "Embers", "Embers" },
+    }) do
+        weatherToggles[w[1]] = group:CreateToggle({
+            name = w[2],
+            flag = "Weather_" .. w[1],
+            value = W.Type == w[1],
+            callback = function(on)
+                if on then
+                    W.Type = w[1]
+                elseif W.Type == w[1] then
+                    W.Type = "None"
+                end
+                updateWeather()
+            end,
+        })
+    end
+
+    tab:CreateSection({ name = "Parameters" })
+    addSlider(tab, "Intensity", "Weather", W, "Intensity", 0.1, 3, 0.05, nil, updateWeather)
+    addSlider(tab, "Wind", "Weather", W, "Wind", 0, 30, 0.5, nil, updateWeather)
+    addSlider(tab, "Wind direction", "Weather", W, "WindAngle", 0, 360, 5, "°", updateWeather)
+    addToggle(tab, "Lightning (thunderstorm)", "Weather", W, "Lightning")
+end
+
+-- Character -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Character" })
+    local C = Config.Character
+
+    tab:CreateSection({ name = "Highlight" })
+    addToggle(tab, "Highlight", "Char", C, "Highlight", enableCharacter)
+    addToggle(tab, "Rainbow mode", "Char", C, "Rainbow", enableCharacter)
+    addColor(tab, "Fill / effects color", "Char", C, "Fill", enableCharacter)
+    addColor(tab, "Outline", "Char", C, "Outline", enableCharacter)
+    addSlider(tab, "Fill transparency", "Char", C, "FillTransparency", 0, 1, 0.01, nil, enableCharacter)
+
+    tab:CreateSection({ name = "Body" })
+    addToggle(tab, "Recolor body", "Char", C, "UseColor", enableCharacter)
+    addColor(tab, "Body color", "Char", C, "BodyColor", enableCharacter)
+    addSlider(tab, "Body transparency", "Char", C, "BodyTransparency", 0, 1, 0.01, nil, enableCharacter)
+    tab:CreateDropdown({
+        name = "Material",
+        flag = "Char_Material",
+        options = { "Default", "Neon", "Glass", "ForceField", "Metal", "Ice", "Marble" },
+        value = "Default",
+        callback = function(v)
+            v = firstOf(v)
+            C.Material = (v == nil or v == "Default") and "" or v
+            enableCharacter()
+        end,
+    })
+
+    tab:CreateSection({ name = "Effects" })
+    addToggle(tab, "Trail", "Char", C, "Trail", enableCharacter)
+    addToggle(tab, "Aura", "Char", C, "Aura", enableCharacter)
+end
+
+-- Hats -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Hats" })
+    local H = Config.Hat
+
+    tab:CreateSection({ name = "Script-built hats" })
+    local hatDropdown = tab:CreateDropdown({
+        name = "Worn hats",
+        flag = "Hats_Script",
+        multiSelect = true,
+        options = ScriptHatNames,
+        value = {},
+        placeholder = "nothing equipped",
+        callback = function(v)
+            if type(v) == "string" then v = { v } end
+            selectedHats = v or {}
+            syncHats()
+        end,
+    })
+
+    tab:CreateSection({ name = "Appearance" })
+    addColor(tab, "Main color", "Hat", H, "Color", hatLook)
+    addColor(tab, "Accent color (rim, details, glow)", "Hat", H, "Accent", hatLook)
+    addToggle(tab, "Rainbow mode", "Hat", H, "Rainbow", hatLook)
+    addToggle(tab, "Neon material", "Hat", H, "Neon", hatLook)
+    addToggle(tab, "Highlight (colors from the Character tab)", "Hat", H, "Highlight", hatLook)
+    addSlider(tab, "Transparency", "Hat", H, "Transparency", 0, 0.95, 0.01, nil, hatLook)
+    tab:CreateDropdown({
+        name = "Material",
+        flag = "Hat_Material",
+        options = { "SmoothPlastic", "Plastic", "Metal", "Glass", "Fabric", "Marble", "Ice" },
+        value = "SmoothPlastic",
+        callback = function(v)
+            H.Material = firstOf(v) or "SmoothPlastic"
+            hatLook()
+        end,
+    })
+
+    tab:CreateSection({ name = "Size and position" })
+    addSlider(tab, "Size", "Hat", H, "Scale", 0.4, 3, 0.05, "x", rebuildHats)
+    addSlider(tab, "Higher / lower", "Char", Config.Character, "HatY", -2, 2, 0.05, nil, applyHatOffsets)
+    addSlider(tab, "Forward / back", "Char", Config.Character, "HatZ", -2, 2, 0.05, nil, applyHatOffsets)
+
+    tab:CreateButton({
+        name = "Remove all hats",
+        callback = function()
+            pcall(function() hatDropdown:Set({}) end)
+            selectedHats = {}
+            syncHats()
+        end,
+    })
+end
+
+-- Armor -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Armor" })
+    local A = Config.Armor
+
+    tab:CreateSection({ name = "Armor pieces" })
+    local armorDropdown = tab:CreateDropdown({
+        name = "Worn armor",
+        flag = "Armor_Pieces",
+        multiSelect = true,
+        options = ArmorNames,
+        value = {},
+        placeholder = "nothing equipped",
+        callback = function(v)
+            if type(v) == "string" then v = { v } end
+            selectedArmor = v or {}
+            syncArmor()
+        end,
+    })
+
+    tab:CreateButton({
+        name = "Equip full set",
+        callback = function()
+            selectedArmor = {}
+            for _, n in ipairs(ArmorNames) do selectedArmor[#selectedArmor + 1] = n end
+            pcall(function() armorDropdown:Set(selectedArmor) end)
+            syncArmor()
+        end,
+    })
+    tab:CreateButton({
+        name = "Remove all armor",
+        callback = function()
+            pcall(function() armorDropdown:Set({}) end)
+            selectedArmor = {}
+            syncArmor()
+        end,
+    })
+
+    tab:CreateSection({ name = "Color schemes" })
+    local group = tab:CreateGroup()
+    for _, name in ipairs(ArmorPresetNames) do
+        group:CreateButton({
+            name = name,
+            callback = function()
+                for k, v in pairs(ArmorPresets[name]) do A[k] = v end
+                refreshControls()
+                armorLook()
+            end,
+        })
+    end
+
+    tab:CreateSection({ name = "Colors" })
+    addColor(tab, "Main (steel)", "Armor", A, "Main", armorLook)
+    addColor(tab, "Trim (edges, spikes)", "Armor", A, "Trim", armorLook)
+    addColor(tab, "Glow (runes, core)", "Armor", A, "Glow", armorLook)
+    addColor(tab, "Cloak cloth", "Armor", A, "Cloth", armorLook)
+    addColor(tab, "Fur", "Armor", A, "Fur", armorLook)
+
+    tab:CreateSection({ name = "Look" })
+    addSlider(tab, "Transparency", "Armor", A, "Transparency", 0, 0.9, 0.01, nil, armorLook)
+    addSlider(tab, "Glow light brightness", "Armor", A, "GlowLight", 0, 5, 0.05, nil, armorLook)
+    addToggle(tab, "Highlight (colors from the Character tab)", "Armor", A, "Highlight", armorLook)
+    tab:CreateDropdown({
+        name = "Metal material",
+        flag = "Armor_Material",
+        options = { "Metal", "DiamondPlate", "CorrodedMetal", "Slate", "Granite", "Marble", "SmoothPlastic", "Ice" },
+        value = "Metal",
+        callback = function(v)
+            A.Material = firstOf(v) or "Metal"
+            armorLook()
+        end,
+    })
+
+    tab:CreateSection({ name = "Cloak" })
+    addSlider(tab, "Cloak sway strength", "Armor", A, "CloakSway", 0, 2.5, 0.05)
+end
+
+-- Configs -------------------------------------------------------------
+do
+    local tab = ui:CreateTab({ name = "Configs" })
+    local cfgName, selected = "", nil
+
+    local function clean(name)
+        return (tostring(name):gsub("[^%w_%- ]", ""))
+    end
+
+    tab:CreateSection({ name = "Save current settings" })
+    tab:CreateInput({
+        name = "Config name",
+        placeholder = "for example: night_vibe",
+        forgetState = true,
+        flag = "Cfg_Name",
+        callback = function(text) cfgName = clean(text) end,
+    })
+
+    local listDropdown
+    local function refreshList()
+        local ok, list = pcall(function() return ui:ListConfigs() end)
+        if ok and listDropdown then
+            pcall(function() listDropdown:Refresh(list or {}) end)
+        end
+    end
+
+    tab:CreateButton({
+        name = "Save",
+        callback = function()
+            if cfgName == "" then
+                notify("Config", "Type a config name first.")
+                return
+            end
+            local ok = ui:Save(cfgName)
+            notify("Config", ok and ("Saved: " .. cfgName) or "Could not save (your executor needs writefile).")
+            refreshList()
+        end,
+    })
+
+    tab:CreateSection({ name = "Saved configs" })
+    local okList, list = pcall(function() return ui:ListConfigs() end)
+    listDropdown = tab:CreateDropdown({
+        name = "Pick a config",
+        flag = "Cfg_List",
+        forgetState = true,
+        options = okList and list or {},
+        placeholder = "no saved configs",
+        callback = function(v) selected = firstOf(v) end,
+    })
+
+    tab:CreateButton({
+        name = "Load selected",
+        callback = function()
+            if not selected then
+                notify("Config", "Pick a config from the list.")
+                return
+            end
+            local ok = ui:Load(selected)
+            visualsEnabled, charEnabled = true, true
+            applyVisuals()
+            applyCharacter()
+            updateWeather()
+            syncHats()
+            syncArmor()
+            armorLook()
+            hatLook()
+            notify("Config", ok and ("Loaded: " .. selected) or "Could not load.")
+        end,
+    })
+    tab:CreateButton({
+        name = "Delete selected",
+        callback = function()
+            if not selected then
+                notify("Config", "Pick a config from the list.")
+                return
+            end
+            local ok = ui:DeleteConfig(selected)
+            notify("Config", ok and ("Deleted: " .. selected) or "Could not delete.")
+            selected = nil
+            refreshList()
+        end,
+    })
+    tab:CreateButton({ name = "Refresh list", callback = refreshList })
+end
+
+----------------------------------------------------------------------
+-- MAIN LOOP, EVENTS, PUBLIC API
+----------------------------------------------------------------------
+local lightningTimer, secondTimer = 0, 0
+
+RunService:BindToRenderStep("WE_Loop", Enum.RenderPriority.Last.Value, function(dt)
+    lightingStep(dt)
+
+    -- the weather emitter follows the camera
+    local cam = workspace.CurrentCamera
+    if weatherPart and cam then
+        weatherPart.CFrame = CFrame.new(cam.CFrame.Position + V3(0, weatherYOffset, 0))
+    end
+
+    -- random lightning flashes during a thunderstorm
+    if Config.Weather.Type == "Storm" and Config.Weather.Lightning then
+        lightningTimer = lightningTimer - dt
+        if lightningTimer <= 0 then
+            flashTime = 0.12
+            lightningTimer = math.random(40, 120) / 10
+        end
+    end
+
+    -- rainbow mode: cycle the shared highlight colors every frame
+    if Config.Character.Rainbow and charEnabled then
+        local col = Color3.fromHSV(tick() % 4 / 4, 1, 1)
+        Config.Character.Fill, Config.Character.Outline = col, col
+        local char = lp.Character
+        local hl = char and char:FindFirstChild("WE_HL")
+        if hl then hl.FillColor, hl.OutlineColor = col, col end
+        local ahl = armorRoot and armorRoot:FindFirstChild("WE_ArmorHL")
+        if ahl then ahl.FillColor, ahl.OutlineColor = col, col end
+        for _, hat in pairs(worn) do
+            local hhl = hat.model:FindFirstChild("WE_HatHL")
+            if hhl then hhl.FillColor, hhl.OutlineColor = col, col end
+        end
+    end
+
+    -- once per second: re-apply (the game may have replaced objects)
+    secondTimer = secondTimer + dt
+    if secondTimer >= 1 then
+        secondTimer = 0
+        applyVisuals()
+        applyCharacter()
+    end
+end)
+
+local charAddedConn = lp.CharacterAdded:Connect(function()
+    clearAllGear()
+    task.wait(1.5)
+    if destroyed then return end
+    applyCharacter()
+    syncHats()
+    syncArmor()
+end)
+
+local inputConn = UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == Enum.KeyCode.RightShift then
+        pcall(function() ui:ToggleHide() end)
+    end
+end)
+
+env.WorldEditor = {
+    Config = Config,
+    Window = ui,
+    Preset = applyPreset,
+    Apply = function()
+        visualsEnabled, charEnabled = true, true
+        refreshAll()
+    end,
+    Destroy = function()
+        destroyed = true
+        pcall(function() RunService:UnbindFromRenderStep("WE_Loop") end)
+        charAddedConn:Disconnect()
+        inputConn:Disconnect()
+        if gearConn then
+            gearConn:Disconnect()
+            gearConn = nil
+        end
+
+        -- restore lighting
+        for _, p in ipairs(LIGHT_PROPS) do Lighting[p] = ORIGINAL[p] end
+        for _, n in ipairs({ "WE_Sky", "WE_Atmo", "WE_CC", "WE_Bloom", "WE_Rays", "WE_Blur" }) do
+            local obj = Lighting:FindFirstChild(n)
+            if obj then obj:Destroy() end
+        end
+        restoreChildren("Sky")
+        restoreChildren("Atmosphere")
+
+        -- weather
+        if weatherPart then weatherPart:Destroy() end
+
+        -- hats and armor
+        clearAllGear()
+
+        -- character
+        local char = lp.Character
+        if char then
+            local hl = char:FindFirstChild("WE_HL")
+            if hl then hl:Destroy() end
+            for part, orig in pairs(bodyOriginals) do
+                if part.Parent then
+                    part.Color, part.Material, part.Transparency = orig[1], orig[2], orig[3]
+                end
+            end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                for _, n in ipairs({ "WE_Trail", "WE_A0", "WE_A1", "WE_Aura" }) do
+                    local obj = root:FindFirstChild(n)
+                    if obj then obj:Destroy() end
+                end
+            end
+        end
+
+        pcall(function() ui:Unload() end)
+        env.WorldEditor = nil
+    end,
+}
+
+task.defer(function()
+    -- if autoload restored non-default values, switch the matching systems on
+    local changed = false
+    for _, cat in ipairs({ "Atmosphere", "Post", "Sky" }) do
+        for key, v in pairs(Config[cat]) do
+            if v ~= DEFAULTS[cat][key] then changed = true end
+        end
+    end
+    for key, v in pairs(Config.Character) do
+        if v ~= DEFAULTS.Character[key] then charEnabled = true end
+    end
+    if changed then visualsEnabled = true end
+
+    refreshAll()
+    syncWeatherUI()
+    syncHats()
+    syncArmor()
+    notify("World Editor ready", "Menu: RightShift. Configs are on the Configs tab.")
+end)
