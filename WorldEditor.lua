@@ -20,7 +20,7 @@ Sky={Enabled=false,Bk="",Dn="",Ft="",Lf="",Rt="",Up="",StarCount=3000,SunSize=21
 Character={Highlight=false,Fill=K(255,0,255),Outline=K(255,255,255),FillTransparency=0.6,Rainbow=false,Material="",UseColor=false,BodyColor=K(255,255,255),BodyTransparency=0,Trail=false,Aura=false,HatY=0,HatZ=0}}
 local CFG=copy(DEF)
 CFG.Hat={Color=K(255,105,180),Accent=K(255,255,255),Transparency=0.15,Material="SmoothPlastic",Neon=false,Rainbow=false,Highlight=false,Scale=1}
-CFG.Armor={Main=K(40,47,66),Trim=K(150,170,200),Glow=K(90,210,255),Cloth=K(20,40,100),Fur=K(205,210,220),Transparency=0,Material="Metal",Highlight=false,GlowLight=1.2,CloakSway=1}
+CFG.Armor={Main=K(56,60,68),Trim=K(150,156,166),Glow=K(90,210,255),Cloth=K(14,16,24),Fur=K(130,132,140),Transparency=0,Material="Metal",Highlight=false,GlowLight=1,CloakSway=1}
 local PRE={
 Day={Lighting={ClockTime=14,Brightness=3,Ambient=K(110,110,110),OutdoorAmbient=K(150,150,150)},Atmosphere={Density=0.3,Color=K(199,170,107),Decay=K(92,60,13)},Post={Bloom=0.4,SunRays=0.1}},
 Sunset={Lighting={ClockTime=17.7,Brightness=2,Ambient=K(110,70,90),OutdoorAmbient=K(200,110,90),ColorShift_Top=K(255,140,80)},Atmosphere={Color=K(255,150,110),Decay=K(255,80,60),Density=0.4,Haze=2,Glare=0.6},Post={TintColor=K(255,225,205),Saturation=0.2,Contrast=0.1,Bloom=0.8,SunRays=0.25}},
@@ -151,6 +151,7 @@ function S.chain(c,r)chain=c and{c=c,r=r}or nil end
 function S.cyl(d,h,cf,role,ex)add(Enum.PartType.Cylinder,V3(h,d,d),cf*CFrame.Angles(0,0,PI/2),role,ex)end
 function S.ball(d,cf,role,ex)add(Enum.PartType.Ball,V3(d,d,d),cf,role,ex)end
 function S.block(sz,cf,role,ex)add(Enum.PartType.Block,sz,cf,role,ex)end
+function S.disc(d,h,cf,role,ex)S.cyl(d,h,cf*CFrame.Angles(PI/2,0,0),role,ex)end
 function S.tri(a,b,c,role)
 local ab,ac,bc=b-a,c-a,c-b
 local x,y,z=ab:Dot(ab),ac:Dot(ac),bc:Dot(bc)
@@ -166,11 +167,6 @@ if z1>1e-4 then put({wedge=true,size=V3(0.05,h,z1),role=role or"main",cf=CFrame.
 if z2>1e-4 then put({wedge=true,size=V3(0.05,h,z2),role=role or"main",cf=CFrame.fromMatrix((a+c)/2,-right,up,-back)})end
 end
 function S.quad(a,b,c,d,role)S.tri(a,b,c,role);S.tri(a,c,d,role)end
-function S.frustum(r1,r2,h,cf,role,n)
-n=n or 6;local lo,hi={},{}
-for i=0,n-1 do local a=i/n*PI*2;lo[i]=cf*V3(math.cos(a)*r1,0,math.sin(a)*r1);hi[i]=cf*V3(math.cos(a)*r2,h,math.sin(a)*r2)end
-for i=0,n-1 do local j=(i+1)%n;S.quad(lo[i],lo[j],hi[j],hi[i],role)end
-end
 function S.cone(r,h,cf,role,n,rim)
 n=n or 32;local apex=cf*V3(0,h,0)
 local function ring(f)local rr,y=r*(1-f),h*f;local p={}for i=0,n-1 do local a=i/n*PI*2;p[i]=cf*V3(math.cos(a)*rr,y,math.sin(a)*rr)end return p end
@@ -179,6 +175,23 @@ for i=0,n-1 do local j=(i+1)%n
 S.tri(apex,top[i],top[j],role)
 if rim then S.tri(base[i],base[j],top[i],rim.role);S.tri(base[j],top[j],top[i],rim.role)end end
 end
+local function fr(a,p)
+local d=p-a;local l=d.Magnitude if l<1e-4 then return end
+local u=d.Unit;local r=u:Cross(math.abs(u.Z)<0.9 and V3(0,0,1)or V3(1,0,0)).Unit
+return CFrame.fromMatrix(a,r,u,r:Cross(u)),l end
+function S.rod(a,b,t,role,ex)local f,l=fr(a,b)if f then add(Enum.PartType.Block,V3(t,l,t),f*CF(0,l/2,0),role,ex)end end
+function S.spike(a,b,r,role,n)local f,l=fr(a,b)if f then S.cone(r,l,f,role,n or 4)end end
+function S.skull(cf,k,role)
+role=role or"trim"
+S.ball(0.62*k,cf*CF(0,0.06*k,0),role)
+S.block(V3(0.36*k,0.24*k,0.3*k),cf*CF(0,-0.25*k,0.02*k),role)
+for _,s in ipairs({1,-1})do S.ball(0.2*k,cf*CF(s*0.14*k,0.05*k,-0.2*k),"dark")end
+S.block(V3(0.07*k,0.1*k,0.06*k),cf*CF(0,-0.12*k,-0.29*k),"dark")
+S.block(V3(0.3*k,0.05,0.04),cf*CF(0,-0.3*k,-0.17*k),"dark")
+end
+function S.fur(y,R,hh,n)
+for i=0,n-1 do local a=i/n*PI*2
+S.block(V3(0.2,hh,0.14),CF(math.sin(a)*R,y+0.05*math.sin(i*2.1),math.cos(a)*R)*CFrame.Angles(0,a,0)*CFrame.Angles(-0.35,0,0),"fur")end end
 return S
 end
 local hatsW,hatsP,armW,armP,selH,selA,armRoot,gconn={},{},{},{},{},{}
@@ -222,113 +235,159 @@ local function defA(n,att,b)APC[n]={name=n,attach=att,build=b};ANAMES[#ANAMES+1]
 defA("Lich King Helm",function()return{"Head"}end,function(S,c)
 local w,h=math.min(c.hx,c.hz),c.hy
 local r=w*1.12
-local function on(a,y,sz,role)S.block(sz,CF(math.sin(a)*(r+0.01),y,-math.cos(a)*(r+0.01))*CFrame.Angles(0,-a,0),role)end
+local f=-r-0.02
+local function on(a,y,sz,role,rz,o)local q=r+0.01+(o or 0);S.block(sz,CF(math.sin(a)*q,y,-math.cos(a)*q)*CFrame.Angles(0,-a,rz or 0),role)end
 S.cyl(r*2,h*2.1,CF(0,0,0),"main")
 S.cyl(r*2.1,h*0.16,CF(0,h*1.04,0),"trim")
 S.cyl(r*2.1,h*0.16,CF(0,-h*1.02,0),"trim")
-S.cone(r*1.02,h*0.85,CF(0,h*1.1,0),"main",18)
-for _,s in ipairs({1,-1})do on(s*0.4,h*0.14,V3(r*0.5,h*0.13,0.06),"glow")end
-for _,a in ipairs({-0.5,-0.25,0.25,0.5})do on(a,-h*0.58,V3(r*0.09,h*0.42,0.06),"trim")end
-S.block(V3(r*0.2,h*0.9,0.08),CF(0,h*0.15,-r-0.015),"trim")
-S.block(V3(h*0.44,h*0.44,0.05),CF(0,h*0.7,-r-0.01)*CFrame.Angles(0,0,PI/4),"trim")
-S.ball(h*0.28,CF(0,h*0.7,-r*0.97),"glow",{light=true})
-for i=0,3 do local a=PI/4+i*PI/2
-S.cone(r*0.14,h*0.95,CF(math.sin(a)*r*0.84,h*1.02,math.cos(a)*r*0.84)*CFrame.Angles(0,a,0)*CFrame.Angles(0.32,0,0),"trim",5)end
+S.cone(r,h*0.4,CF(0,h*1.1,0),"main",14)
+for _,v in ipairs({{0,1.25,0},{0.5,0.95,0.2},{1,0.8,0.3},{1.5,0.65,0.45},{2.1,0.6,0.4},{2.7,0.55,0.3},{PI,0.65,0.1}})do
+for _,s in ipairs((v[1]==0 or v[1]==PI)and{1}or{1,-1})do
+local a,L=v[1]*s,h*v[2]
+local b=V3(math.sin(a)*r*0.88,h,-math.cos(a)*r*0.88)
+S.spike(b,b+V3(math.sin(a)*L*v[3],L,-math.cos(a)*L*v[3]),r*(v[1]==0 and 0.19 or 0.14),"trim")
+end end
+local gy=h*0.6
+S.quad(V3(0,gy+h*0.5,f),V3(h*0.27,gy,f),V3(0,gy-h*0.42,f),V3(-h*0.27,gy,f),"trim")
+S.quad(V3(0,gy+h*0.38,f-0.04),V3(h*0.17,gy,f-0.04),V3(0,gy-h*0.3,f-0.04),V3(-h*0.17,gy,f-0.04),"glow")
+S.ball(0.1,CF(0,gy,f-0.07),"glow",{light=true})
+for _,a in ipairs({-0.36,0,0.36})do on(a,-h*0.12,V3(r*0.46,h*0.9,0.05),"dark")end
 for _,s in ipairs({1,-1})do
-local g=CF(s*r*0.95,h*0.5,r*0.05)*CFrame.Angles(0.2,0,-s*1.05)
-S.frustum(r*0.3,r*0.22,h*0.9,g,"main",6)
-local g2=g*CF(0,h*0.9,0)*CFrame.Angles(0,0,s*0.75)
-S.frustum(r*0.22,r*0.13,h*0.9,g2,"main",6)
-S.cone(r*0.13,h*0.9,g2*CF(0,h*0.9,0)*CFrame.Angles(0,0,s*0.4),"trim",6)end
+on(s*0.3,h*0.1,V3(r*0.36,h*0.1,0.07),"glow",s*0.3,0.02)
+on(s*0.95,-h*0.4,V3(r*0.5,h*1.05,0.07),"main",0,0.03)
+on(s*0.66,-h*0.4,V3(0.05,h*1.05,0.09),"trim",0,0.04)
+S.spike(V3(s*r*0.98,-h*0.1,r*0.2),V3(s*r*1.45,-h*0.3,r*0.8),r*0.11,"trim")
+end
+S.block(V3(r*0.14,h*0.7,0.07),CF(0,-h*0.05,f-0.015),"trim")
+for _,a in ipairs({-0.45,-0.22,0.22,0.45})do on(a,-h*0.52,V3(r*0.08,h*0.42,0.06),"trim",0,0.02)end
+S.spike(V3(0,-h*0.95,-r*0.9),V3(0,-h*1.5,-r*1.35),r*0.16,"trim")
 end)
 defA("Pauldrons",function(r)return r=="R15"and{"RightUpperArm","LeftUpperArm"}or{"Right Arm","Left Arm"}end,function(S,c,x)
 local s,t,aw=x.s,c.hy,c.hx*2
-local ox,cy=s*aw*0.08,t-aw*0.02
 local yb=(x.rig=="R6")and-0.06 or-t
-local yt=t-aw*0.6
-S.cyl(aw*1.1,yt-yb,CF(0,(yt+yb)/2,0),"main")
-S.cyl(aw*1.2,0.08,CF(0,yb+0.04,0),"trim")
-S.ball(aw*1.45,CF(ox,cy,0),"main")
-S.cyl(aw*1.29,0.1,CF(ox,cy-aw*0.4,0),"trim")
-S.cyl(aw*1.43,0.05,CF(ox,cy-aw*0.22,0),"glow")
-S.cone(aw*0.17,aw*1.05,CF(ox+s*aw*0.3,t+aw*0.52,0)*CFrame.Angles(0,0,-s*0.5),"trim",6)
-S.ball(aw*0.22,CF(ox+s*aw*0.2,t+aw*0.12,-aw*0.67),"glow")
+S.cyl(aw*1.4,t-yb-0.05,CF(0,(t+yb-0.05)/2,0),"main")
+S.cyl(aw*1.5,0.08,CF(0,yb+0.04,0),"trim")
+local D=aw*(s>0 and 1.6 or 1.4)
+local ox,cy=s*aw*0.1,t-aw*0.12
+S.ball(D,CF(ox,cy,0),"main")
+S.cyl(D,D*0.3,CF(ox,cy-D*0.15,0),"main")
+S.cyl(D*1.04,0.07,CF(ox,cy,0),"trim")
+S.cyl(D*1.07,0.09,CF(ox,cy-D*0.3+0.045,0),"trim")
+if s>0 then
+local R=D/2+0.01
+for k=-2,2 do for _,e in ipairs({0.2,0.7})do
+local a=k*0.4
+S.ball(0.09,CF(ox+math.cos(e)*math.sin(a)*R,cy+math.sin(e)*R,-math.cos(e)*math.cos(a)*R),"trim")end end
+else
+local p=CF(ox+s*aw*0.15,cy+aw*0.5,-0.03)*CFrame.Angles(0,0,-s*0.3)
+local H=aw*1.25
+local BI,BO,TO,TI=V3(-s*aw*0.5,-H/2,0),V3(s*aw*0.55,-H/2,0),V3(s*aw*0.9,H/2,0),V3(-s*aw*0.5,H/2*1.08,0)
+S.quad(p*BI,p*BO,p*TO,p*TI,"main")
+for _,e in ipairs({{BI,BO},{BO,TO},{TO,TI},{TI,BI}})do S.rod(p*e[1],p*e[2],0.09,"trim")end
+for _,u in ipairs({0.25,0.5,0.75})do
+local a,b=BI+(BO-BI)*u,TI+(TO-TI)*u
+S.rod(p*(a+(b-a)*0.2+V3(0,0,-0.03)),p*(a+(b-a)*0.8+V3(0,0,-0.03)),0.06,"dark")end
+for _,u in ipairs({0.1,0.3,0.5,0.7,0.9})do
+local b=TI+(TO-TI)*u
+S.spike(p*b,p*(b+V3(s*(u-0.4)*0.5,0.4+0.15*(1-math.abs(u-0.5)*2),0)),0.09,"trim")end
+end
 end)
 defA("Chestplate",function(r)return r=="R15"and{"UpperTorso"}or{"Torso"}end,function(S,c)
 local X,Y,Z=c.hx,c.hy,c.hz
+local f=-Z-0.09
 S.block(V3(X*2+0.06,Y*2-0.04,Z*2+0.06),CF(0,0,0),"main")
 for _,s in ipairs({1,-1})do
-local g=CF(s*X*0.5,Y*0.56,-Z-0.1)*CFrame.Angles(0,-s*0.16,0)
-S.block(V3(X*0.94,Y*0.76,0.14),g,"main")
-S.block(V3(X*0.94,0.06,0.18),g*CF(0,Y*0.38,0),"trim")
-S.block(V3(X*0.94,0.06,0.18),g*CF(0,-Y*0.38,0),"trim")
-S.block(V3(X*0.8,0.05,0.05),g*CF(0,Y*0.12,-0.095),"glow")
-S.block(V3(X*0.9,0.07,Z*2+0.26),CF(s*X*0.6,Y+0.03,0)*CFrame.Angles(0,0,-s*0.22),"main")end
-S.block(V3(0.2,Y*0.9,0.2),CF(0,-Y*0.22,-Z-0.15)*CFrame.Angles(0,PI/4,0),"trim")
-S.cyl(0.58,0.06,CF(0,Y*0.55,-Z-0.2)*CFrame.Angles(PI/2,0,0),"trim")
-S.ball(0.3,CF(0,Y*0.55,-Z-0.27),"glow",{light=true})
-for i=0,2 do
-local w,y=X*(1.76-0.2*i),-i*Y*0.3
-S.block(V3(w,Y*0.3,0.1),CF(0,y,-Z-0.08),"main")
-S.block(V3(w,0.05,0.14),CF(0,y-Y*0.15,-Z-0.08),"trim")end
+local g=CF(s*X*0.5,Y*0.3,f)*CFrame.Angles(0,-s*0.18,-s*0.1)
+S.block(V3(X*0.98,Y*1.0,0.14),g,"main")
+S.block(V3(X*1.0,0.07,0.18),g*CF(0,Y*0.5,0),"trim")
+S.block(V3(X*1.0,0.07,0.18),g*CF(0,-Y*0.5,0),"trim")
+S.block(V3(0.08,Y*1.0,0.18),g*CF(-s*X*0.49,0,0),"trim")
+for k=-1,1 do S.ball(0.08,g*CF(k*X*0.22-s*X*0.1,-Y*0.38,-0.09),"trim")end
+local q=CF(s*X*0.72,Y*0.5,f-0.1)
+S.disc(0.62,0.08,q,"trim")
+S.disc(0.52,0.1,q*CF(0,0,-0.03),"main")
+S.skull(q*CF(0,-0.01,-0.1),0.62)
+S.block(V3(X*0.9,0.1,Z*2+0.26),CF(s*X*0.6,Y+0.03,0)*CFrame.Angles(0,0,-s*0.22),"main")
+S.block(V3(X*0.9,0.04,Z*2+0.3),CF(s*X*0.6,Y+0.09,0)*CFrame.Angles(0,0,-s*0.22),"trim")
+end
+S.block(V3(0.18,Y*1.5,0.18),CF(0,Y*0.12,f-0.04)*CFrame.Angles(0,PI/4,0),"trim")
+for i=0,1 do
+local w,y=X*(1.7-0.24*i),-Y*0.25-i*Y*0.26
+S.block(V3(w,Y*0.26,0.1),CF(0,y,-Z-0.07),"main")
+S.block(V3(w,0.05,0.14),CF(0,y-Y*0.13,-Z-0.07),"trim")end
 S.block(V3(X*1.9,Y*1.7,0.12),CF(0,Y*0.02,Z+0.09),"main")
 S.block(V3(X*1.9,0.06,0.14),CF(0,Y*0.87,Z+0.09),"trim")
-S.cyl(1.6,0.16,CF(0,Y,0),"trim")
-S.cyl(1.4,0.2,CF(0,Y+0.12,0),"main")
+S.cyl(1.5,0.1,CF(0,Y-0.03,0),"trim")
 end)
 defA("Belt",function(r)return r=="R15"and{"LowerTorso"}or{"Torso"}end,function(S,c,x)
 local X,Z=c.hx,c.hz
 local y=(x.rig=="R6")and(-c.hy+0.3)or 0
+local f=-Z-0.1
 S.block(V3(X*2.08,0.3,Z*2.2),CF(0,y,0),"main")
 S.block(V3(X*2.12,0.05,Z*2.26),CF(0,y+0.165,0),"trim")
 S.block(V3(X*2.12,0.05,Z*2.26),CF(0,y-0.165,0),"trim")
-S.cyl(0.52,0.08,CF(0,y,-Z-0.1)*CFrame.Angles(PI/2,0,0),"trim")
-S.ball(0.2,CF(0,y,-Z-0.15),"glow")
+local q=CF(0,y,f-0.02)
+S.disc(0.9,0.1,q,"trim")
+S.disc(0.78,0.12,q*CF(0,0,-0.03),"main")
+S.skull(q*CF(0,0.02,-0.13),0.8)
 for _,s in ipairs({1,-1})do
-local g=CF(s*X*0.58,y-0.45,-Z-0.08)*CFrame.Angles(0.07,-s*0.28,0)
-S.block(V3(X*0.5,0.7,0.08),g,"main")
-S.block(V3(X*0.5,0.05,0.11),g*CF(0,-0.35,0),"trim")
-S.cone(0.12,0.6,CF(s*(X+0.06),y,0)*CFrame.Angles(0,0,-s*1.2),"trim",4)end
-local g=CF(0,y-0.5,-Z-0.1)*CFrame.Angles(0.07,0,0)
-S.block(V3(X*0.56,0.8,0.08),g,"main")
-S.block(V3(X*0.56,0.05,0.11),g*CF(0,-0.4,0),"trim")
-S.block(V3(0.05,0.55,0.05),g*CF(0,-0.02,-0.06),"glow")
+local p=CF(s*X*0.66,y,f)
+S.disc(0.4,0.1,p,"trim")
+S.ball(0.16,p*CF(0,0,-0.07),"trim")
+end
+local t0,L,z=y-0.17,1.2,f-0.01
+local a,b,e,d,g=V3(-X*0.46,t0,z),V3(X*0.46,t0,z),V3(X*0.4,t0-L*0.72,z),V3(-X*0.4,t0-L*0.72,z),V3(0,t0-L,z)
+S.quad(a,b,e,d,"cloth");S.tri(d,e,g,"cloth")
+S.rod(a,d,0.06,"trim");S.rod(b,e,0.06,"trim");S.rod(d,g,0.06,"trim");S.rod(e,g,0.06,"trim")
 S.block(V3(X*1.4,0.75,0.08),CF(0,y-0.45,Z+0.1),"main")
 S.block(V3(X*1.4,0.05,0.11),CF(0,y-0.83,Z+0.1),"trim")
 end)
 defA("Bracers",function(r)return r=="R15"and{"RightLowerArm","LeftLowerArm","RightHand","LeftHand"}or{"Right Arm","Left Arm"}end,function(S,c,x)
 local s,aw=x.s,c.hx*2
+local function ice(y)
+for _,v in ipairs({{0,0,1.1},{0.4,0.15,0.85},{-0.4,-0.1,0.9},{0.1,-0.4,0.7}})do
+local b=V3(v[1]*aw*0.55,y,v[2]*aw*0.8)
+S.spike(b,b+V3(v[1]*0.6,-v[3],-0.15),aw*0.17,"glow",5)end end
 if x.name:find("Hand")then
-S.block(V3(aw*1.14,c.hy*2+0.12,aw*1.14),CF(0,-0.03,0),"main")
-S.cyl(aw*1.22,0.08,CF(0,c.hy+0.05,0),"trim")
-for _,d in ipairs({-0.28,0,0.28})do S.cone(0.07,0.3,CF(d*aw,-0.02,-aw*0.52)*CFrame.Angles(-PI/2+0.25,0,0),"trim",4)end
-return
-end
-local yc=(x.rig=="R6")and(-c.hy*0.5-0.02)or 0
-local L=(x.rig=="R6")and 0.92 or c.hy*2*0.9
-S.cyl(aw*1.2,L,CF(0,yc,0),"main")
-S.cyl(aw*1.3,0.1,CF(0,yc+L/2-0.05,0),"trim")
-S.cyl(aw*1.3,0.1,CF(0,yc-L/2+0.05,0),"trim")
-S.cyl(aw*1.26,0.05,CF(0,yc+L*0.05,0),"glow")
-S.block(V3(0.1,L*0.7,aw*0.6),CF(s*aw*0.62,yc,0),"trim")
-S.cone(aw*0.12,aw*0.6,CF(0,yc+L/2-0.05,aw*0.42)*CFrame.Angles(PI/2-0.25,0,0),"main",4)
+S.block(V3(aw*1.2,c.hy*2+0.12,aw*1.2),CF(0,-0.03,0),"main")
+S.block(V3(aw*1.28,0.08,aw*1.28),CF(0,c.hy+0.05,0),"trim")
+for _,d in ipairs({-0.28,0,0.28})do S.spike(V3(d*aw,-0.02,-aw*0.55),V3(d*aw,-0.14,-aw*0.55-0.32),0.07,"trim")end
+if s<0 then ice(-c.hy*0.3)end
+return end
+local r6=x.rig=="R6"
+local yc=r6 and(-c.hy*0.5-0.02)or 0
+local L=r6 and 0.92 or c.hy*2*0.9
+S.cyl(aw*1.4,L,CF(0,yc,0),"main")
+S.cyl(aw*1.5,0.1,CF(0,yc+L/2-0.05,0),"trim")
+S.cyl(aw*1.5,0.1,CF(0,yc-L/2+0.05,0),"trim")
+for _,k in ipairs({0.18,-0.18})do
+S.cyl(aw*1.45,0.07,CF(0,yc+L*k,0),"dark")
+S.block(V3(0.12,0.16,0.08),CF(s*aw*0.74,yc+L*k,0),"trim")end
+for _,k in ipairs({-1,1})do S.spike(V3(s*aw*0.64,yc+k*L*0.28,aw*0.3),V3(s*aw*0.95,yc+k*L*0.28-0.12,aw*0.62),aw*0.08,"trim")end
+if r6 and s<0 then ice(-c.hy+0.3)end
 end)
 defA("Legs",function(r)return r=="R15"and{"RightUpperLeg","LeftUpperLeg","RightLowerLeg","LeftLowerLeg"}or{"Right Leg","Left Leg"}end,function(S,c,x)
 local aw=c.hx*2
-local rd=aw*0.6
 local function th(y,h)
-S.cyl(aw*1.2,h,CF(0,y,0),"main")
-S.block(V3(aw*0.36,h*0.8,0.07),CF(0,y,-rd-0.03),"trim")
-S.cyl(aw*1.3,0.1,CF(0,y+h/2-0.05,0),"trim")
-S.cyl(aw*1.26,0.05,CF(0,y-h*0.22,0),"glow")
+local d=aw*1.36
+S.cyl(d,h,CF(0,y,0),"main")
+S.cyl(d*1.08,0.1,CF(0,y+h/2-0.05,0),"trim")
+for i=1,5 do S.cyl(d*1.05,0.06,CF(0,y+h/2-0.08-i*h*0.15,0),"trim")end
+S.rod(V3(0,y+h/2-0.05,-d/2-0.02),V3(0,y-h/2+0.06,-d/2-0.02),0.1,"trim")
 end
 local function sh(y,h,k)
-S.cyl(aw*1.14,h,CF(0,y,0),"main")
-S.block(V3(0.12,h*0.8,0.12),CF(0,y-h*0.05,-rd*0.95)*CFrame.Angles(0,PI/4,0),"trim")
-S.cyl(aw*1.26,0.1,CF(0,y-h/2+0.05,0),"trim")
-S.cyl(aw*1.2,0.05,CF(0,y+h*0.12,0),"glow")
-S.ball(aw*0.5,CF(0,k,-rd*0.8),"trim")
-S.cone(aw*0.15,aw*0.6,CF(0,k,-rd*0.85)*CFrame.Angles(-PI/2+0.35,0,0),"main",5)
+local d=aw*1.3
+S.cyl(d,h,CF(0,y,0),"main")
+S.cyl(d*1.08,0.1,CF(0,y-h/2+0.05,0),"trim")
+S.cyl(d*1.12,0.24,CF(0,k,0),"fur")
+S.fur(k-0.06,d*0.56,0.28,9)
+local z=-d/2-0.06
+S.disc(aw*1.0,0.08,CF(0,k+0.05,z+0.03),"trim")
+S.disc(aw*0.86,0.12,CF(0,k+0.05,z-0.02),"main")
+S.skull(CF(0,k+0.04,z-0.1),0.62)
+S.spike(V3(0,k+aw*0.45,z-0.02),V3(0,k+aw*0.85,z-0.3),aw*0.13,"trim",5)
+for _,q in ipairs({1,-1})do S.spike(V3(q*aw*0.42,k+0.05,z+0.04),V3(q*aw*0.75,k-0.05,z-0.04),0.07,"trim")end
+S.rod(V3(0,k-aw*0.45,-d/2-0.01),V3(0,y-h/2+0.08,-d/2-0.01),0.1,"trim")
 end
 if x.rig=="R6"then th(0.52,0.9);sh(-0.52,0.9,-0.02)
 elseif x.name:find("Upper")then th(0,c.hy*2*0.92)
@@ -340,15 +399,16 @@ local y=-c.hy+0.26
 S.block(V3(aw*1.14,0.46,aw*1.36),CF(0,y,-aw*0.08),"main")
 S.block(V3(aw*1.2,0.07,aw*1.46),CF(0,y-0.215,-aw*0.08),"trim")
 S.block(V3(aw,0.22,aw*0.42),CF(0,y-0.06,-aw*0.58),"trim")
-S.cone(0.1,0.45,CF(0,y-0.04,-aw*0.78)*CFrame.Angles(-PI/2+0.1,0,0),"trim",4)
-S.cyl(aw*1.24,0.1,CF(0,y+0.26,0),"trim")
-S.cyl(aw*1.28,0.05,CF(0,y+0.26,0),"glow")
+for _,d in ipairs({-0.3,0,0.3})do S.spike(V3(d*aw,y-0.04,-aw*0.72),V3(d*aw*1.1,y-0.14,-aw*1.15),0.07,"trim")end
+S.cyl(aw*1.4,0.08,CF(0,y+0.24,0),"trim")
+S.cyl(aw*1.45,0.3,CF(0,y+0.36,0),"fur")
+S.fur(y+0.28,aw*0.72,0.34,9)
 end)
 defA("Cloak",function(r)return r=="R15"and{"UpperTorso"}or{"Torso"}end,function(S,c)
 local X,Y,Z=c.hx,c.hy,c.hz
 local cols,rows=7,7
 local rh=(Y*2+1.7)/rows
-local wt,wb=X*2+0.1,X*2+0.8
+local wt,wb=X*2+0.1,X*2+1.0
 local xs={}
 for i=1,cols do xs[i]=(i-(cols+1)/2)*(wt/cols)end
 for i=1,cols do
@@ -357,6 +417,7 @@ S.chain(i,r)
 local w=(wt+(wb-wt)*(r-1)/(rows-1))/cols
 if r==1 then S.block(V3(w*1.04,rh*1.05,0.16),CF(0,-rh/2,0),"fur")
 else S.block(V3(w*1.04,rh*1.05,0.06),CF(0,-rh/2,(i%2)*0.01),"cloth")end
+if i==1 or i==cols then S.block(V3(0.07,rh*1.05,0.1),CF((i==1 and-1 or 1)*w*0.5,-rh/2,0),"trim")end
 end
 S.chain(i,rows)
 local w=wb/cols
@@ -371,7 +432,7 @@ for r=1,rows do cl.aX[r],cl.aZ[r]=0,0 end
 S.meta.cloak=cl
 end)
 local APRE={
-["Lich King"]={Main=K(40,47,66),Trim=K(150,170,200),Glow=K(90,210,255),Cloth=K(20,40,100),Fur=K(205,210,220)},
+["Lich King"]={Main=K(56,60,68),Trim=K(150,156,166),Glow=K(90,210,255),Cloth=K(14,16,24),Fur=K(130,132,140)},
 ["Blood Knight"]={Main=K(55,15,20),Trim=K(210,170,70),Glow=K(255,70,50),Cloth=K(110,15,20),Fur=K(230,225,215)},
 ["Fel"]={Main=K(30,40,30),Trim=K(120,150,110),Glow=K(110,255,90),Cloth=K(25,60,35),Fur=K(190,200,180)},
 ["Silver Hand"]={Main=K(205,210,222),Trim=K(235,190,70),Glow=K(255,230,140),Cloth=K(30,70,160),Fur=K(240,240,245)}}
@@ -535,7 +596,7 @@ if armRoot then armRoot:Destroy();armRoot=nil end
 end
 function armLook()
 local A,Ch=CFG.Armor,CFG.Character
-local pal={main=A.Main,trim=A.Trim,glow=A.Glow,cloth=A.Cloth,fur=A.Fur}
+local pal={main=A.Main,trim=A.Trim,glow=A.Glow,cloth=A.Cloth,fur=A.Fur,dark=A.Main:Lerp(K(0,0,0),0.82)}
 local mat=Enum.Material[A.Material]
 for _,e in pairs(armW)do
 for _,r in ipairs(e.parts)do
@@ -544,7 +605,7 @@ if p.Parent then
 local role=r.role
 local col=pal[role]or A.Main
 local m=mat
-if role=="glow"then m=Enum.Material.Neon elseif role=="cloth"or role=="fur"then m=Enum.Material.SmoothPlastic end
+if role=="glow"then m=Enum.Material.Neon elseif role=="cloth"or role=="fur"then m=Enum.Material.Fabric end
 local tr=(role=="glow")and math.min(A.Transparency,0.6)or A.Transparency
 if p.Color~=col then p.Color=col end
 if p.Material~=m then p.Material=m end
@@ -740,7 +801,7 @@ t:CreateButton({name="Remove all armor",callback=function()pcall(function()armDD
 local g=t:CreateGroup()
 for _,n in ipairs(APN)do g:CreateButton({name=n,callback=function()for k,v in pairs(APRE[n])do A[k]=v end;refresh();armLook()end})end
 end},
-{"Main","c","Main (steel)",armLook},{"Trim","c","Trim",armLook},{"Glow","c","Glow",armLook},{"Cloth","c","Cloak cloth",armLook},{"Fur","c","Cloak collar",armLook},
+{"Main","c","Main (steel)",armLook},{"Trim","c","Trim",armLook},{"Glow","c","Glow",armLook},{"Cloth","c","Cloak cloth",armLook},{"Fur","c","Fur / collar",armLook},
 {"Transparency","s","Transparency",0,0.9,0.01,nil,armLook},{"GlowLight","s","Glow light",0,5,0.05,nil,armLook},{"Highlight","t","Highlight",armLook},
 {"","x",function(t)t:CreateDropdown({name="Metal",flag="Armor_Material",options={"Metal","DiamondPlate","CorrodedMetal","Slate","Granite","Marble","SmoothPlastic","Ice"},value="Metal",callback=function(v)
 A.Material=first(v)or"Metal";armLook()end})end},
